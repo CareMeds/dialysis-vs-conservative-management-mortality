@@ -1,12 +1,12 @@
 ################################################################################
-### Decision for dialysis versus conservative care
+### Decision for dialysis versus conservative management
 ### PART 7 - Example ITE calculation for random patient
 ################################################################################
 
 # set-up
 rm(list = ls(all.names = TRUE))
 setwd(
-  "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/"
+  "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/"
 )
 set.seed(1)
 

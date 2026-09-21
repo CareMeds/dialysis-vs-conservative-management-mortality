@@ -1,5 +1,5 @@
 ################################################################################
-### Decision for dialysis versus conservative care
+### Decision for dialysis versus conservative management
 ### PART 0 - Data preparation
 ################################################################################
 
@@ -8,7 +8,7 @@ rm(list = ls(all.names = TRUE))
 
 # load data
 setwd(
-  "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/"
+  "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/"
 )
 load("Data/cleaned/snr_ckd.Rdata")        # CKD patients
 load("Data/cleaned/snr_rrt.Rdata")        # Renal Replacement Therapy (transplantation)
@@ -114,9 +114,27 @@ snr_rrt[, `:=`(
 )]
 
 # some IDs have multiple rows
-snr_rrt[, uniqueN(LOPNR)]      # 43276
+snr_rrt[, uniqueN(LOPNR)]          # 43276
 snr_rrt[, .N, by = "LOPNR"][N > 1] # 21292
-snr_rrt[LOPNR == 18316963, ]      # example
+snr_rrt[LOPNR == 18316963, ]       # example
+
+# long snr RRT data
+snr_rrt_long <- copy(snr_rrt)
+
+# dup_check <- snr_rrt_long[, .N, by = LOPNR][N > 1, LOPNR]
+# 
+# snr_rrt_long[LOPNR %in% dup_check, .(
+#   n_rows        = .N,
+#   n_dates       = uniqueN(krt_startdate),
+#   n_modalities  = uniqueN(krt_modality)
+# ), by = LOPNR][, .(
+#   # patients where every duplicate row shares the same date
+#   only_same_date       = sum(n_dates == 1),
+#   # patients where duplicates span more than one date (real switches)
+#   spans_multiple_dates = sum(n_dates > 1)
+# )]
+
+save(snr_rrt_long, file = "Data/cleaned/snr_rrt_long.Rdata")
 
 # only keep krt_start == 1 information, this does not delete IDs
 snr_rrt <- snr_rrt[krt_start == 1, ]

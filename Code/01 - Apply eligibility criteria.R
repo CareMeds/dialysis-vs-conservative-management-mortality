@@ -1,5 +1,5 @@
 ################################################################################
-### Decision for dialysis versus conservative care
+### Decision for dialysis versus conservative management
 ### PART 1 - Apply eligibility criteria
 ################################################################################
 
@@ -7,7 +7,7 @@
 rm(list = ls(all.names = TRUE))
 set.seed(1)
 setwd(
-  "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/"
+  "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/"
 )
 
 # load libraries
@@ -164,7 +164,7 @@ if (new_diag) {
     comorbidities = Davies_comorbidities,
     max_date_dict = max_date_dict
   )$diagnoses_dt
-  save(Davies_65_80, file = "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/Data/Davies_65_80.Rdata")
+  save(Davies_65_80, file = "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/Data/Davies_65_80.Rdata")
 }
 
 # 1.4 Add comorbidities to dt
@@ -339,8 +339,10 @@ lab_complete_dt <- lab_dt[complete.cases(lab_dt[, lab_vars, with = FALSE])]
 # Extract the date at which KRT is started or the first decision for transplantation or dialysis is made
 first_dia_trans <- merged_ckd[!is.na(krt_startdate) |
                                 !is.na(decision_tx_date1) |
-                                !is.na(decision_date1), .(date_dia_trans = min(krt_startdate, decision_tx_date1, decision_date1 +
-                                                                                 1, na.rm = TRUE)), by = "LOPNR"]
+                                !is.na(decision_date1),
+                              .(date_dia_trans = min(krt_startdate, decision_tx_date1,
+                                                     decision_date1 + 1, na.rm = TRUE)),
+                              by = "LOPNR"]
 
 # Append first date of dialysis or transplantation
 trans_dia_dt <- merge(lab_complete_dt,
@@ -380,7 +382,8 @@ if (new_diag) {
       max_date = end_date
     )
   )$diagnoses_dt
-  save(hiv_dementia, file = "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/Data/hiv_dementia.Rdata")
+  save(hiv_dementia, 
+       file = "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/Data/hiv_dementia.Rdata")
 }
 
 # 2. create dt that finds first hiv or dementia event
@@ -550,7 +553,7 @@ flow_chart <- data.frame(
             "Eligible patients",
             "Excluded patients with treatment decision dialysis or CC",
             "Final cohort",
-            "Patients who chose conservative care",
+            "Patients who chose conservative management",
             "Patients who chose dialysis"),
   counts = c(  merged_ckd[, uniqueN(LOPNR)],
                merged_ckd[, uniqueN(LOPNR)] - low_egfr[, uniqueN(LOPNR)],

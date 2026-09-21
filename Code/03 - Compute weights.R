@@ -1,16 +1,16 @@
 ################################################################################
-### Decision for dialysis versus conservative care
+### Decision for dialysis versus conservative management
 ### PART 3 - Analysis
 ################################################################################
 
 # set-up
 rm(list = ls(all.names = TRUE))
-knitr::opts_knit$set(root.dir = "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/")
+knitr::opts_knit$set(root.dir = "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/")
 set.seed(1)
 setwd(
-  "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/"
+  "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/"
 )
-results_path <- "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/Results/"
+results_path <- "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/Results/"
 
 # load libraries
 library(data.table)
@@ -142,7 +142,7 @@ catvar <- listvar[!listvar %in% contvar]
 
 # define labels
 treatment_label <- "Dialysis"
-control_label <- "Conservative care"
+control_label <- "Conservative management"
 non_normal_vars <- c("age",
                      "Davies_score",
                      "egfr2021",
@@ -414,10 +414,14 @@ summ_weights <- data.table::rbindlist(lapply(w_meths[-1], function(w_meth) {
 # Write to Excel (one worksheet)
 openxlsx::write.xlsx(
   x = summ_weights,
-  file = file.path(results_path, "Supplemental/Table_S5_weights.xlsx"),
+  file = file.path(results_path, "Supplemental/Table_S_weights.xlsx"),
   rowNames = FALSE,
   overwrite = TRUE
 )
+
+# set sw_ISPW to 1 for those not in baseline, and to IPSW for those in baseline
+idx <- match(elig_cohort$LOPNR, baseline$LOPNR) # gives NA for S = 0 rows
+elig_cohort[, sw_IPSW := data.table::fifelse(is.na(idx), 1, baseline$sw_IPSW[idx])]
 
 # save cohort
 save(

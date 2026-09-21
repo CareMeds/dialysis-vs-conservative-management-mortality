@@ -1,5 +1,5 @@
 ################################################################################
-### Decision for dialysis versus conservative care
+### Decision for dialysis versus conservative management
 ### PART 5 - Average treatment effect
 ################################################################################
 
@@ -8,9 +8,9 @@ rm(list = ls(all.names = TRUE))
 knitr::opts_knit$set(root.dir = "P:/SCREAM2/SCREAM2_Research/Carolien Maas/")
 set.seed(1)
 setwd(
-  "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/"
+  "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/"
 )
-results_path <- "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/Results/"
+results_path <- "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/Results/"
 
 # load libraries
 library(data.table)
@@ -56,7 +56,7 @@ print(quantile(
     reverse = TRUE
   )
 ))
-# Conservative care: 14.56 (6.30;30.00)
+# Conservative management: 14.56 (6.30;30.00)
 
 ################################################################################
 ### Combine absolute and relative results in one Table and make KM plot
@@ -125,8 +125,8 @@ for (w_meth in w_meths) {
 ggplot2::ggsave(
   plot = ggpubr::ggarrange(
     out_KM_event_death_2y_IPTW$KM_plot,
-      # ggplot2::ggtitle(outcome_label) +
-      # ggplot2::theme(axis.title.y = ggplot2::element_text(margin = ggplot2::margin(r = -10))),
+    # ggplot2::ggtitle(outcome_label) +
+    # ggplot2::theme(axis.title.y = ggplot2::element_text(margin = ggplot2::margin(r = -10))),
     out_KM_event_death_2y_unweighted$KM_table +
       ggplot2::theme(plot.background = ggplot2::element_rect(fill = "white", color = NA)),
     ncol = 1,
@@ -141,61 +141,21 @@ ggplot2::ggsave(
 
 # Supplemental Table for all outcomes and horizons
 for (w_meth in w_meths) {
-  # Initialize the results table with one row for the outcome name
-  results_df <- data.frame(Conservative_care = outcome_label, Dialysis =
-                             "")
-  rownames(results_df) <- "Outcome"
-  
-  # Add a header row for the weighting method
-  results_df[ifelse(w_meth == "unweighted",
-                    "Unweighted",
-                    paste("Weighting", w_meth)), ] <- rep("", 2)
-  
-  # obtain sample size
-  results_df["Sample size", ] <- c(sum(baseline$trt == 0), sum(baseline$trt == 1))
-  
-  # Add raw number of events to the table
-  results_df["Number of events", ] <- c(sum(baseline[[outcome_var]] == 1 &
-                                                baseline$trt == 0),
-                                          sum(baseline[[outcome_var]] == 1 &
-                                                baseline$trt == 1))
-  
   # obtain correct estimates
-  out_est <- eval(parse(text = paste0("out_est_", outcome_var, "_", w_meth)))
+  out_est <- get(paste0("out_est_", outcome_var, "_", w_meth))
   
-  # fill absolute risks
-  results_df[paste("Risk, % (95% CI)", w_meth), ] <-
-    c(
-      fmt_ci(out_est$R0 * 100, out_est$R0_lower * 100, out_est$R0_upper * 100),
-      fmt_ci(out_est$R1 * 100, out_est$R1_lower * 100, out_est$R1_upper * 100)
-    )
-  
-  # fill risk difference
-  results_df[paste("Risk difference, % (95% CI)", w_meth), ] <-
-    c("Reference",
-      fmt_ci(out_est$RD * 100, out_est$RD_lower * 100, out_est$RD_upper * 100))
-  
-  # fill risk ratio
-  results_df[paste("Risk ratio (95% CI)", w_meth), ] <-
-    c("Reference",
-      fmt_ci(out_est$RR, out_est$RR_lower, out_est$RR_upper, 2))
-  
-  # fill RMST
-  results_df[paste("RMST, ", unit, " (95% CI)", w_meth), ] <-
-    c(
-      fmt_ci(out_est$RMST0, out_est$RMST0_lower, out_est$RMST0_upper),
-      fmt_ci(out_est$RMST1, out_est$RMST1_lower, out_est$RMST1_upper)
-    )
-  
-  # fill RMST difference
-  results_df[paste("\u0394RMST, ", unit, " (95% CI)", w_meth), ] <-
-    c("Reference",
-      fmt_ci(out_est$dRMST, out_est$dRMST_lower, out_est$dRMST_upper))
-  
-  # fill hazard ratio
-  results_df[paste("HR (95% CI)", w_meth), ] <-
-    c("Reference",
-      fmt_ci(out_est$HR, out_est$HR_lower, out_est$HR_upper, 2))
+  # build the results table using the shared helper (now in tables.R)
+  results_df <- build_results_table(
+    data = baseline,
+    out_est = out_est,
+    label = outcome_label,
+    outcome_var = outcome_var,
+    trt_var = trt_var,
+    control_label = "Conservative_management",
+    treatment_label = "Dialysis",
+    w_meth = w_meth,
+    unit = unit
+  )
   
   assign(paste0("results_df_", w_meth), results_df)
 }
@@ -209,12 +169,12 @@ openxlsx::write.xlsx(
 openxlsx::write.xlsx(
   results_df_IPSW_IPTW,
   rowNames = TRUE,
-  file = paste0(results_path, "Supplemental/Table_S9_IPSW.xlsx")
+  file = paste0(results_path, "Supplemental/Table_S_generalizability.xlsx")
 )
 openxlsx::write.xlsx(
   rbind(results_df_IPTW, results_df_SMR_ATT[-c(1, 2), ], results_df_SMR_ATU[-c(1, 2), ]),
   rowNames = TRUE,
-  file = paste0(results_path, "Supplemental/Table_S7_ATT_ATU.xlsx")
+  file = paste0(results_path, "Supplemental/Table_S_ATT_ATU.xlsx")
 )
 
 # save cohort

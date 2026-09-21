@@ -1,5 +1,5 @@
 ################################################################################
-### Decision for dialysis versus conservative care
+### Decision for dialysis versus conservative management
 ### PART 6 - Continuous heterogeneous treatment effect estimation
 ################################################################################
 
@@ -8,9 +8,9 @@ rm(list = ls(all.names = TRUE))
 knitr::opts_knit$set(root.dir = "P:/SCREAM2/SCREAM2_Research/Carolien Maas/")
 set.seed(1)
 setwd(
-  "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/"
+  "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/"
 )
-results_path <- "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/Results/"
+results_path <- "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/Results/"
 
 # load libraries
 library(patchwork) # combine figures
@@ -80,7 +80,7 @@ risk_model <- rms::cph(
   x = TRUE
 )
 png(
-  filename = "Results/Supplemental/Figure_M1_Risk_model.png",
+  filename = "Results/Supplemental/Figure_M_HTE_Risk_model.png",
   width = 2000,
   height = 2000,
   res = 300
@@ -193,7 +193,7 @@ for (cohort in list(list(prefix = "elig", label = "elig"),
   save_cal_plot(
     cal_plot_obj   = cal_plots[[cohort$prefix]],
     annotated_plot = annotated,
-    filename       = paste0("Figure_M1_calibration_", cohort$label, ".png")
+    filename       = paste0("Figure_M_HTE_calibration_", cohort$label, ".png")
   )
 }
 
@@ -256,7 +256,7 @@ summmarized_table <- rbind(
   ITE_model_lp$risk_model_table
 )
 openxlsx::write.xlsx(summmarized_table, 
-                     file = paste0(results_path, "Supplemental/Table_S4_risk_ITE.xlsx"), 
+                     file = paste0(results_path, "Supplemental/Table_S_HTE_risk_HR.xlsx"), 
                      rowNames = FALSE)
 
 ################################################################################
@@ -418,7 +418,9 @@ for (nr_analysis in 1:2) {
 }
 
 # compute figures and tables
-HTE_table <- data.frame()
+HTE_table_age <- data.frame()
+HTE_table_sex <- data.frame()
+HTE_table_pred_risk <- data.frame()
 for (nr_analysis in 1:2) {
   for (effect_modifier in c("age", "sex", "pred_risk")) {
     # create histogram of variable stratified by treatment
@@ -465,10 +467,8 @@ for (nr_analysis in 1:2) {
       
       # save table
       if (effect_modifier == "age") {
-        sel_rows <- c(
-          which(estimates_df$effect_modifier_range == 65),
-          which(estimates_df$effect_modifier_range == 90)
-        )
+        # every round-number age already evaluated (min to max: seq(65,95,1))
+        sel_rows <- order(estimates_df$effect_modifier_range)
         range <- estimates_df[sel_rows, "effect_modifier_range"]
       } else if (effect_modifier == "sex") {
         sel_rows <- c(
@@ -477,11 +477,20 @@ for (nr_analysis in 1:2) {
         )
         range <- estimates_df[sel_rows, "effect_modifier_range"]
       } else if (effect_modifier == "pred_risk") {
-        sel_rows <- c(
-          which(estimates_df$effect_modifier_range == p_range[2]),
-          which(estimates_df$effect_modifier_range == p_range[3])
-        )
-        range <- sprintf("%.2f", estimates_df[sel_rows, "effect_modifier_range"])
+        # approximate pred_risk_step_pct steps by rounding the already-computed
+        # grid (100 points spread evenly in the linear-predictor scale, not
+        # evenly in probability) to the nearest multiple of that step, keeping
+        # - for each distinct step value from min to max - the one
+        # already-evaluated row closest to that exact value. Steps with no
+        # nearby evaluated point are simply absent from the table (a gap),
+        # since no new grid points are computed here.
+        pred_risk_step_pct <- 5
+        pct <- round(estimates_df$effect_modifier_range * 100 / pred_risk_step_pct) * pred_risk_step_pct
+        sel_rows <- sapply(sort(unique(pct)), function(target) {
+          candidates <- which(pct == target)
+          candidates[which.min(abs(estimates_df$effect_modifier_range[candidates] - target / 100))]
+        })
+        range <- paste0(pct[sel_rows], "%")
       }
       est <- sprintf(ifelse(measure == "RR" |
                               measure == "HR", "%.2f", "%.1f"),
@@ -520,7 +529,8 @@ for (nr_analysis in 1:2) {
           y_min_dRMST = ifelse(nr_analysis == 1, -3, -8),
           y_max_dRMST = 10,
           y_min_HR = 0,
-          y_max_HR = ifelse(nr_analysis == 1, 1.3, 1.8)
+          y_max_HR = ifelse(nr_analysis == 1, 1.3, 1.8),
+          show_favor_annotation = (measure == "RD")
         )
         
         # control x-axis of effect plot
@@ -544,32 +554,84 @@ for (nr_analysis in 1:2) {
             )
         }
         
-        # combine the effect and histogram
-        combined_effect_hist <- (effect_plot_out / hist_stratified) +
+        # combine the effect and histogram (x-axis title on the histogram is
+        # blanked here since a single shared x-axis label is added under each
+        # full row of 4 plots further below)
+        combined_effect_hist <- (
+          effect_plot_out /
+            (hist_stratified + ggplot2::theme(axis.title.x = ggplot2::element_blank()))
+        ) +
           plot_layout(heights = c(1, 0.2))
         
         assign(paste0(effect_modifier, "_", measure, "_plot"),
                combined_effect_hist)
       }
     }
-    HTE_table <- rbind(HTE_table, HTE_tab)
+    # prefix this block with a subgroup label row (blank data cells) carrying
+    # the overall interaction p-value in the last column - one p-value covers
+    # the whole block now that age/pred_risk have many rows each, rather than
+    # a fixed 2-row block as before
+    n_cols <- ncol(HTE_tab)
+    subgroup_label <- if (nr_analysis == 1) "Full cohort" else "Davies comorbidity score >=2 subgroup"
+    p_val <- get(paste0("p_value_", effect_modifier, "_", nr_analysis))
+    header_row <- matrix(c(subgroup_label, rep("", n_cols - 1), p_val), nrow = 1)
+    data_rows <- cbind(HTE_tab, rep("", nrow(HTE_tab)))
+    HTE_block <- rbind(header_row, data_rows)
+    
+    if (effect_modifier == "age") {
+      HTE_table_age <- rbind(HTE_table_age, HTE_block)
+    } else if (effect_modifier == "sex") {
+      HTE_table_sex <- rbind(HTE_table_sex, HTE_block)
+    } else if (effect_modifier == "pred_risk") {
+      HTE_table_pred_risk <- rbind(HTE_table_pred_risk, HTE_block)
+    }
   }
+  
+  # small text-only panels used as row titles
+  age_row_title <- ggplot2::ggplot() +
+    ggplot2::theme_void() +
+    ggplot2::labs(title = "Effect modification by age") +
+    ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5, face = "bold", size = 24))
+  
+  pred_risk_row_title <- ggplot2::ggplot() +
+    ggplot2::theme_void() +
+    ggplot2::labs(title = "Effect modification by 2-year mortality risk (%)") +
+    ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5, face = "bold", size = 24))
+  
+  # small text-only panels used as one shared x-axis label per row
+  # (the individual columns' own x-axis titles are blanked above)
+  age_x_label <- ggplot2::ggplot() +
+    ggplot2::theme_void() +
+    ggplot2::labs(title = "Age in years") +
+    ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5, size = 18))
+  
+  pred_risk_x_label <- ggplot2::ggplot() +
+    ggplot2::theme_void() +
+    ggplot2::labs(title = "Predicted 2-year mortality risk (%)") +
+    ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5, size = 18))
   
   # save figure
   ggplot2::ggsave(
-    plot = (age_RD_plot | age_RR_plot | age_dRMST_plot | age_HR_plot) /
-      (
-        pred_risk_RD_plot | 
-          pred_risk_RR_plot |
-          pred_risk_dRMST_plot | 
-          pred_risk_HR_plot
-      ),
+    plot = (
+      age_row_title /
+        (age_RD_plot | age_RR_plot | age_dRMST_plot | age_HR_plot) /
+        age_x_label /
+        pred_risk_row_title /
+        (
+          pred_risk_RD_plot | 
+            pred_risk_RR_plot |
+            pred_risk_dRMST_plot | 
+            pred_risk_HR_plot
+        ) /
+        pred_risk_x_label
+    ) +
+      patchwork::plot_layout(heights = c(0.05, 1, 0.04, 0.05, 1, 0.04)),
     filename = paste0(
       results_path,
       ifelse(
         nr_analysis == 1,
-        "Main/Figure_3.pdf",
-        "Supplemental/Figure_S8_DCS.png"
+        "Main/Figure_4.pdf",
+        "Supplemental/Figure_S_HTE_DCS.png"
       )
     ),
     width = 20,
@@ -578,30 +640,53 @@ for (nr_analysis in 1:2) {
   )
 }
 
-# save table
-HTE_table_final <- data.frame(
-  HTE_table,
-  c(p_value_age_1, "", 
-    p_value_sex_1, "",
-    p_value_pred_risk_1, "",
-    p_value_age_2, "", 
-    p_value_sex_2, "",
-    p_value_pred_risk_2, "")
-)
-colnames(HTE_table_final) <- c("Effect modifier",
-                               "RD",
-                               "95% CI",
-                               "dRMST",
-                               "95% CI",
-                               "RR",
-                               "95% CI",
-                               "HR",
-                               "95% CI",
-                               "p-value")
+# save tables (age and pred_risk now span their full range; p-values are
+# already embedded per-block via the subgroup label row built above, so no
+# separate p-value vector needs assembling here)
+colnames(HTE_table_age) <- c("Age",
+                             "RD",
+                             "95% CI",
+                             "dRMST",
+                             "95% CI",
+                             "RR",
+                             "95% CI",
+                             "HR",
+                             "95% CI",
+                             "p-value")
+colnames(HTE_table_sex) <- c("Sex",
+                             "RD",
+                             "95% CI",
+                             "dRMST",
+                             "95% CI",
+                             "RR",
+                             "95% CI",
+                             "HR",
+                             "95% CI",
+                             "p-value")
+colnames(HTE_table_pred_risk) <- c("Predicted risk",
+                                   "RD",
+                                   "95% CI",
+                                   "dRMST",
+                                   "95% CI",
+                                   "RR",
+                                   "95% CI",
+                                   "HR",
+                                   "95% CI",
+                                   "p-value")
 openxlsx::write.xlsx(
-  HTE_table_final,
+  HTE_table_age,
   rowNames = FALSE,
-  file = paste0(results_path, "Supplemental/Table_S6_HTE.xlsx")
+  file = paste0(results_path, "Supplemental/Table_S_HTE_age.xlsx")
+)
+openxlsx::write.xlsx(
+  HTE_table_sex,
+  rowNames = FALSE,
+  file = paste0(results_path, "Other/Table_S_HTE_sex.xlsx")
+)
+openxlsx::write.xlsx(
+  HTE_table_pred_risk,
+  rowNames = FALSE,
+  file = paste0(results_path, "Supplemental/Table_S_HTE_pred_risk.xlsx")
 )
 
 # save variables
@@ -632,5 +717,17 @@ save(
   table_risk,
   ITE_model_lp,
   ITE_model_age,
+  age_RD,
+  age_RR,
+  age_dRMST,
+  age_HR,
+  sex_RD,
+  sex_RR,
+  sex_dRMST,
+  sex_HR,
+  pred_risk_RD,
+  pred_risk_RR,
+  pred_risk_dRMST,
+  pred_risk_HR,
   file = file.path("Data/cohort_with_prob.Rdata")
 )

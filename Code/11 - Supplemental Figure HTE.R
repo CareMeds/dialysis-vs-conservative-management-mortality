@@ -1,5 +1,5 @@
 ################################################################################
-### Decision for dialysis versus conservative care
+### Decision for dialysis versus conservative management
 ### PART 11 - Illustration relationship between RD, RR, RMST, and HR
 ################################################################################
 
@@ -8,9 +8,9 @@ rm(list = ls(all.names = TRUE))
 knitr::opts_knit$set(root.dir = "P:/SCREAM2/SCREAM2_Research/Carolien Maas/")
 set.seed(1)
 setwd(
-  "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/"
+  "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/"
 )
-results_path <- "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/Results/"
+results_path <- "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/Results/"
 
 # load function to plot
 source("Code/utils/plots.R")
@@ -106,7 +106,7 @@ final_plot <- ggpubr::ggarrange(
 # ---- Save ----
 ggplot2::ggsave(
   plot     = final_plot,
-  filename = file.path(results_path, "Supplemental/Figure_M2_HTE_simulation.png"),
+  filename = file.path(results_path, "Supplemental/Figure_M_HTE_simulation.png"),
   width    = 10,
   height   = 5,
   dpi      = 600

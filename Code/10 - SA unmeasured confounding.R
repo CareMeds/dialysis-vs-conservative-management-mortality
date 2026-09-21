@@ -1,5 +1,5 @@
 ################################################################################
-### Decision for dialysis versus conservative care
+### Decision for dialysis versus conservative management
 ### PART 10 - Sensitivity analysis for unmeasured confounding
 ################################################################################
 
@@ -7,8 +7,8 @@
 rm(list = ls(all.names = TRUE))
 knitr::opts_knit$set(root.dir = "P:/SCREAM2/SCREAM2_Research/Carolien Maas/")
 set.seed(1)
-setwd("P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/")
-results_path <- "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/Results/"
+setwd("P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/")
+results_path <- "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/Results/"
 
 # load libraries
 library(tidyverse)
@@ -45,7 +45,7 @@ z_facet <- (P_C0_matrix[-1, -1] +
 facet_col <- color_palette[cut(z_facet, nbcol)]
 
 png(
-  file.path(results_path, paste0("Supplemental/Figure_M3_3D_Plot.png")),
+  file.path(results_path, paste0("Supplemental/Figure_M_unmeasured_confounding_3D_Plot.png")),
   width  = 1200,
   height = 1000,
   res    = 150
@@ -62,7 +62,7 @@ persp(
   border    = "black",
   xlab      = "Confounder-outcome strength (RR_CD)",
   ylab      = "Prevalence dialysis (%, P_C1)",
-  zlab      = "Prevalence conservative care (%, P_C0)",
+  zlab      = "Prevalence conservative management (%, P_C0)",
   main      = "A. Varying RR_CD, P_C0, and P_C1",
   cex.main  = 1.2,
   cex.axis  = 0.8,
@@ -102,7 +102,7 @@ plot_fixed_P_C0 <- ggplot(df_fixed_P_C0, aes(x = RR_CD, y = P_C1, colour = P_C0_
   labs(
     x      = "Confounder strength (RR_CD)",
     y      = "Prevalence in dialysis group (%, P_C1)",
-    title  = "B. Fixed prevalence in conservative care group",
+    title  = "B. Fixed prevalence in conservative management group",
     subtitle = paste0("RR_confounded = ", rr_confounded, ", RR_unconfounded = ", rr_unconfounded),
     colour = NULL
   ) +
@@ -116,7 +116,7 @@ plot_fixed_P_C0 <- ggplot(df_fixed_P_C0, aes(x = RR_CD, y = P_C1, colour = P_C0_
 plot_fixed_P_C0
 
 ggsave(
-  file.path(results_path, "Supplemental/Figure_M3_fix_P_C0.png"),
+  file.path(results_path, "Supplemental/Figure_M_unmeasured_confounding_fix_P_C0.png"),
   plot   = plot_fixed_P_C0,
   width  = 8,
   height = 6,
@@ -124,7 +124,7 @@ ggsave(
 )
 
 ################################################################################
-### 2D plot: fixed RR_CD — conservative care group prevalence (P_C0) vs required P_C1
+### 2D plot: fixed RR_CD — conservative management group prevalence (P_C0) vs required P_C1
 ################################################################################
 RR_CD         <- c(2, 3, 4, 5)
 P_C0          <- seq(1, 99, length.out = n)
@@ -148,7 +148,7 @@ plot_fixed_RR_CD <- ggplot(df_fixed_RR_CD, aes(x = P_C0_fixed, y = P_C1, colour 
   scale_y_continuous(limits = c(0, 100), breaks = seq(0, 100, 20)) +
   scale_colour_manual(values = my_colours2) +
   labs(
-    x        = "Prevalence in conservative care group (%, P_C0)",
+    x        = "Prevalence in conservative management group (%, P_C0)",
     y        = "Prevalence in dialysis group (%, P_C1)",
     title    = "C. Fixed strength between unmeasured confounder and outcome",
     subtitle = paste0("RR_confounded = ", rr_confounded, ", RR_unconfounded = ", rr_unconfounded),
@@ -164,7 +164,7 @@ plot_fixed_RR_CD <- ggplot(df_fixed_RR_CD, aes(x = P_C0_fixed, y = P_C1, colour 
 plot_fixed_RR_CD
 
 ggsave(
-  file.path(results_path, "Supplemental/Figure_M3_fix_RR_CD.png"),
+  file.path(results_path, "Supplemental/Figure_M_unmeasured_confounding_fix_RR_CD.png"),
   plot   = plot_fixed_RR_CD,
   width  = 8,
   height = 6,

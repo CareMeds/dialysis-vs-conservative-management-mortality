@@ -1,5 +1,5 @@
 ################################################################################
-### Decision for dialysis versus conservative care
+### Decision for dialysis versus conservative management
 ### PART 8 - Sensitivity analysis for positivity
 ################################################################################
 
@@ -8,9 +8,9 @@ rm(list = ls(all.names = TRUE))
 knitr::opts_knit$set(root.dir = "P:/SCREAM2/SCREAM2_Research/Carolien Maas/")
 set.seed(1)
 setwd(
-  "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/"
+  "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/"
 )
-results_path <- "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Care/Results/"
+results_path <- "P:/SCREAM2/SCREAM2_Research/Carolien Maas/Project Dialysis versus Conservative Management/Results/"
 
 # load libraries
 library(patchwork) # combine figures
@@ -262,7 +262,7 @@ final_plot <- patchwork::wrap_plots(plot_list, design = layout_design) +
 # Save
 ggplot2::ggsave(
   plot = final_plot,
-  filename = paste0(results_path, "Supplemental/Figure_S6.png"),
+  filename = paste0(results_path, "Supplemental/Figure_S_positivity.png"),
   width = 20,
   height = 20,
   dpi = 300
@@ -281,7 +281,7 @@ nonoverlap_forest <- create_forest_plot_all_measures(dt = setDT(summary_table),
                                                      print_metrics = c("N", "Nonoverlap"))
 ggplot2::ggsave(
   plot = nonoverlap_forest$combined_plot,
-  filename = paste0(results_path, "Supplemental/Figure_S7.png"),
+  filename = paste0(results_path, "Supplemental/Figure_S_positivity_forest.png"),
   width = 11,
   height = 8,
   dpi = 300
