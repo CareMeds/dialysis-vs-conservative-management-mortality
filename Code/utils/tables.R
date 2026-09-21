@@ -1,6 +1,12 @@
 # Define the stand_diff function
+# Returns the absolute standardized difference (unsigned), consistent with
+# tableone's own SMD convention (|mean diff| / pooled SD for continuous
+# variables, a non-negative Mahalanobis-type distance for categorical ones).
+# Without abs(), this would return a signed value whenever the control
+# group's proportion exceeds the treatment group's for a given category
+# level - inconsistent with every other SMD in the table.
 stand_diff <- function(pT, pC) {
-  d <- (pT - pC) / (sqrt((pT * (1 - pT) + pC * (1 - pC)) / 2))
+  d <- abs(pT - pC) / (sqrt((pT * (1 - pT) + pC * (1 - pC)) / 2))
   return(d)
 }
 
@@ -25,8 +31,19 @@ create_baseline_table <- function(data,
                                   treatmentColumn = NULL,
                                   treatmentLabel = NULL,
                                   controlLabel,
+                                  treatmentValue = NULL,
+                                  controlValue = NULL,
                                   tableCaption,
                                   tableRowLabels = NA) {
+  # treatmentValue/controlValue are the ACTUAL values found in treatmentColumn
+  # (e.g. 0/1, or "HD"/"PD"). They default to "1"/"0" to preserve behavior
+  # for existing calls that stratify on 0/1-coded columns (S, trt_var, etc.),
+  # where treatmentLabel/controlLabel are only cosmetic renames applied after
+  # the fact. For columns already coded with the display values themselves
+  # (like dialysis_type == "HD"/"PD"), pass treatmentValue/controlValue
+  # explicitly.
+  if (is.null(treatmentValue)) treatmentValue <- "1"
+  if (is.null(controlValue)) controlValue <- "0"
   # extract IDs
   data <- copy(data)
   data[, ID := get(id_name)]
@@ -64,7 +81,7 @@ create_baseline_table <- function(data,
     pDigits = 3,
     format = "fp"
   )
-
+  
   # Only apply to rows belonging to categorical variables
   cont_rows <- grepl(
     paste0("^(", paste(continuousVars, collapse = "|"), ")"),
@@ -73,7 +90,7 @@ create_baseline_table <- function(data,
   rn <- rownames(table_overall)
   table_overall[!cont_rows, ] <- apply(table_overall[!cont_rows, , drop = FALSE], 2, fix_counts)
   rownames(table_overall) <- rn
-
+  
   # Optional row labels
   if (!is.null(tableRowLabels) && length(tableRowLabels) > 1) {
     row.names(table_overall) <- tableRowLabels
@@ -114,7 +131,7 @@ create_baseline_table <- function(data,
       pDigits = 3,
       smd = TRUE
     )
-
+    
     # Only apply to rows belonging to categorical variables
     cont_rows <- grepl(
       paste0("^(", paste(continuousVars, collapse = "|"), ")"),
@@ -126,7 +143,18 @@ create_baseline_table <- function(data,
     rownames(table_stratified_rounded) <- rn
     
     # Keep treatment, control, and SMD columns
-    table_stratified <- as.matrix(cbind(table_stratified_rounded[, c("1", "0")],
+    missing_vals <- setdiff(c(treatmentValue, controlValue), colnames(table_stratified_rounded))
+    if (length(missing_vals) > 0) {
+      stop(
+        "create_baseline_table: could not find column(s) ",
+        paste(sprintf('"%s"', missing_vals), collapse = ", "),
+        " in the stratified table produced from treatmentColumn = \"", treatmentColumn, "\".\n",
+        "Available columns are: ", paste(sprintf('"%s"', colnames(table_stratified_rounded)), collapse = ", "), ".\n",
+        "Pass treatmentValue/controlValue matching the ACTUAL values in `", treatmentColumn, "` ",
+        "(treatmentLabel/controlLabel are only used to relabel the output columns)."
+      )
+    }
+    table_stratified <- as.matrix(cbind(table_stratified_rounded[, c(treatmentValue, controlValue)],
                                         table_stratified[, "SMD"]))
     
     # Optional row labels
@@ -197,6 +225,57 @@ create_baseline_table <- function(data,
     raw_table = table_1,
     smd_table = smd_table
   ))
+}
+
+# Insert a labeled header row before each named section of a baseline table
+# (blank data cells, with the section name as the row's label), instead of
+# manually rbind()-ing hardcoded row-index slices with plain blank
+# separator rows.
+#
+# `section_sizes` is a named integer vector where each name is the section
+# label shown in the output (e.g. "Demographics") and each value is the
+# number of rows that section occupies in `tbl`. The function verifies
+# nrow(tbl) == sum(section_sizes) and fails loudly if they don't match,
+# instead of silently inserting rows in the wrong place - which is exactly
+# what happens if a variable is added/removed/reordered and the manual
+# index ranges (e.g. 1:27, 28:53, ...) aren't updated too.
+insert_section_breaks <- function(tbl, section_sizes) {
+  stopifnot(
+    "insert_section_breaks: nrow(tbl) does not match sum(section_sizes) - a variable was likely added, removed or reordered without updating section_sizes" =
+      nrow(tbl) == sum(section_sizes)
+  )
+  n_sections <- length(section_sizes)
+  section_names <- names(section_sizes)
+  if (is.null(section_names) || any(section_names == "")) {
+    section_names <- paste0("Section ", seq_len(n_sections))
+  }
+  ends <- cumsum(section_sizes)
+  starts <- c(1, head(ends, -1) + 1)
+  
+  pieces <- vector("list", n_sections)
+  for (i in seq_len(n_sections)) {
+    pieces[[i]] <- tbl[starts[i]:ends[i], , drop = FALSE]
+  }
+  
+  # a one-row, all-blank slice with the section name as its row label - this
+  # is what makes the section name visible in the exported table (rownames
+  # become the leftmost label column via write.xlsx(..., rowNames = TRUE)),
+  # while still visually separating sections the same way a blank row did
+  header_row <- function(name) {
+    matrix(
+      rep("", ncol(tbl)),
+      nrow = 1,
+      dimnames = list(name, colnames(tbl))
+    )
+  }
+  
+  out <- rbind(header_row(section_names[1]), pieces[[1]])
+  if (n_sections > 1) {
+    for (i in 2:n_sections) {
+      out <- rbind(out, header_row(section_names[i]), pieces[[i]])
+    }
+  }
+  out
 }
 
 create_table_with_ci <- function(data_absolute_risks,
@@ -351,9 +430,9 @@ calculate_smd <- function(vec1, vec2, w1 = NULL, w2 = NULL) {
 }
 
 risk_model_table <- function(model_cox,
-                                  predictor_labels,
-                                  horizon,
-                                  digits = 2) {
+                             predictor_labels,
+                             horizon,
+                             digits = 2) {
   # ── Validate labels match model terms ───────────────────────────────────────
   model_terms <- broom::tidy(model_cox) |> dplyr::pull(term)
   
@@ -386,4 +465,72 @@ risk_model_table <- function(model_cox,
   risk_model_table <- rbind(baseline_row, predictor_rows)
   
   return(list(h0 = h0, coef = coefficients(model_cox), centers = model_cox$means, risk_model_table = risk_model_table))
+}
+
+# Build a table for results
+build_results_table <- function(data,
+                                out_est,
+                                label,
+                                outcome_var,
+                                trt_var,
+                                control_label,
+                                treatment_label,
+                                w_meth,
+                                unit) {
+  results_df <- data.frame(Control = label, Treatment = "")
+  rownames(results_df) <- "Outcome"
+  colnames(results_df) <- c(control_label, treatment_label)
+  
+  # Header row for the weighting method
+  results_df[ifelse(w_meth == "unweighted",
+                    "Unweighted",
+                    paste("Weighting", w_meth)), ] <- rep("", 2)
+  
+  # Sample size
+  results_df["Sample size", ] <- c(sum(data[[trt_var]] == 0),
+                                   sum(data[[trt_var]] == 1))
+  
+  # Number of events
+  results_df["Number of events", ] <- c(
+    sum(data[[outcome_var]] == 1 & data[[trt_var]] == 0),
+    sum(data[[outcome_var]] == 1 & data[[trt_var]] == 1)
+  )
+  
+  # Absolute risks
+  results_df[paste("Risk, % (95% CI)", w_meth), ] <- c(
+    fmt_ci(out_est$R0 * 100, out_est$R0_lower * 100, out_est$R0_upper * 100),
+    fmt_ci(out_est$R1 * 100, out_est$R1_lower * 100, out_est$R1_upper * 100)
+  )
+  
+  # Risk difference
+  results_df[paste("Risk difference, % (95% CI)", w_meth), ] <- c(
+    "Reference",
+    fmt_ci(out_est$RD * 100, out_est$RD_lower * 100, out_est$RD_upper * 100)
+  )
+  
+  # Risk ratio
+  results_df[paste("Risk ratio (95% CI)", w_meth), ] <- c(
+    "Reference",
+    fmt_ci(out_est$RR, out_est$RR_lower, out_est$RR_upper, 2)
+  )
+  
+  # RMST
+  results_df[paste0("RMST, ", unit, " (95% CI) ", w_meth), ] <- c(
+    fmt_ci(out_est$RMST0, out_est$RMST0_lower, out_est$RMST0_upper),
+    fmt_ci(out_est$RMST1, out_est$RMST1_lower, out_est$RMST1_upper)
+  )
+  
+  # RMST difference
+  results_df[paste0("\u0394RMST, ", unit, " (95% CI) ", w_meth), ] <- c(
+    "Reference",
+    fmt_ci(out_est$dRMST, out_est$dRMST_lower, out_est$dRMST_upper)
+  )
+  
+  # Hazard ratio
+  results_df[paste("HR (95% CI)", w_meth), ] <- c(
+    "Reference",
+    fmt_ci(out_est$HR, out_est$HR_lower, out_est$HR_upper, 2)
+  )
+  
+  return(results_df)
 }

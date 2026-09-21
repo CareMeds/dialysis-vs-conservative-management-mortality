@@ -10,6 +10,7 @@ calc_event <- function(cohort_dt,
                        code_col = NULL,    # Column containing ICD or event code (e.g., ULORSAK, hdia)
                        codes = NULL,       # Regex pattern to filter events (e.g., "^I21|^I22|^I23")
                        window = NULL,      # Follow-up window in years
+                       extra_cols = NULL,  # Extra columns
                        suffix = "") {      # Suffix for output column names (e.g., "_death_5y")
   
   # Make a copy of the cohort to avoid modifying the original data
@@ -25,9 +26,10 @@ calc_event <- function(cohort_dt,
       outcome_dataset <- outcome_dataset[grepl(codes, get(code_col))]
     }
     
-    # Keep only the relevant columns: lopnr + event date
-    outcome_dataset <- outcome_dataset[, .(ID = get(id_name),
-                                           event_date = get(date_col))]
+    # Keep ID + event date + any extra columns requested
+    keep_cols <- c(id_name, date_col, extra_cols)
+    outcome_dataset <- outcome_dataset[, ..keep_cols]
+    setnames(outcome_dataset, c(id_name, date_col), c("ID", "event_date"))
     
     # Join visit_date from dt (bringing only visit_date)
     outcome_dataset <- dt[, ][outcome_dataset,
@@ -35,10 +37,11 @@ calc_event <- function(cohort_dt,
                               nomatch = 0]
     
     # Filter events after visit_date and get the earliest event per ID
+    setorder(outcome_dataset, ID, event_date)
     earliest_events <- outcome_dataset[event_date > visit_date,
-                                       .(event_date = min(event_date, na.rm = TRUE)), 
+                                       .SD[1, c("event_date", extra_cols), with = FALSE],
                                        by = "ID"]
-    
+
     # Merge earliest_events back into dt
     dt <- earliest_events[dt, on = "ID"]
   } else {
@@ -80,6 +83,12 @@ calc_event <- function(cohort_dt,
   # -----------------------------
   # Keep only the first event per patient
   # -----------------------------
+  # TODO: check if needed
+  # If the event didn't occur inside this window, the extra info doesn't apply
+  if (!is.null(extra_cols)) {
+    dt[event == 0L, (extra_cols) := NA]
+  }
+  
   # Order by ID, descending event (so 1 comes before 0), and ascending event_date
   setorder(dt, ID, -event, event_date)
   
@@ -98,9 +107,11 @@ calc_event <- function(cohort_dt,
   # -----------------------------
   # Rename columns to include outcome and window suffix
   # -----------------------------
-  dt <- dt[, .(ID, event, event_dt, time2event)]
+  keep <- c("ID", "event", "event_dt", "time2event", extra_cols)
+  dt <- dt[, ..keep]
   setnames(dt, "ID", id_name) # revert naming
-  var <- c("event", "event_dt", "time2event")
+  
+  var <- c("event", "event_dt", "time2event", extra_cols)
   setnames(dt, old = var, new = paste0(var, suffix)) # add suffix for clarity
   
   return(dt)
@@ -136,7 +147,8 @@ add_multiple_outcomes <- function(cohort_dt,
         code_col = outcome$code_col,       # column with ICD/event code (optional)
         codes = outcome$codes,             # regex pattern to filter events (optional)
         window = window,
-        suffix = paste0("_", outcome_name, "_", win_name) # e.g., "_death_5y"
+        suffix = paste0("_", outcome_name, "_", win_name), # e.g., "_death_5y"
+        extra_cols = outcome$extra_cols
       )
       
       # Merge the computed outcome back into the main cohort table

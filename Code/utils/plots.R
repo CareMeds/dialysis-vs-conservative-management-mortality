@@ -225,7 +225,7 @@ create_KM_plot <- function(data,
     robust = TRUE,
     weights = weights[keep]
   )
-
+  
   # Use do.call to ensure the function call is constructed correctly
   KM_fit <- do.call(survival::survfit, fit_args)
   KM_curve <- summary(KM_fit, times = unique(plot_data$time))
@@ -239,7 +239,7 @@ create_KM_plot <- function(data,
     n.censor = KM_curve$n.censor
   )
   censor_data <- censor_dt[n.censor>0]
-    
+  
   # create plot
   KM_plot <- ggplot2::ggplot(
     plot_data,
@@ -310,9 +310,9 @@ create_KM_plot <- function(data,
   
   # create table
   KM_table <- ggplot2::ggplot(risk_table, 
-                           ggplot2::aes(x = time, 
-                                        y = strata, 
-                                        label = n.risk)) +
+                              ggplot2::aes(x = time, 
+                                           y = strata, 
+                                           label = n.risk)) +
     ggplot2::geom_text() +
     ggplot2::scale_x_continuous(limits = c(0, horizon / 365),
                                 breaks = seq(0, horizon / 365, by = 0.5)) +
@@ -554,7 +554,8 @@ effect_plot <- function(estimates_df,
                         y_min_dRMST,
                         y_max_dRMST = 10,
                         y_min_HR = 0,
-                        y_max_HR) {
+                        y_max_HR,
+                        show_favor_annotation = TRUE) {
   # add padding on y-axis
   padding_y <- ifelse(measure == "HR" | measure == "RR", 0.1, ifelse(measure == "RD", 5, 1))
   
@@ -586,6 +587,19 @@ effect_plot <- function(estimates_df,
     x_min_text <- 61.5
   }
   
+  # label describing the effect measure (now used as plot title, not y-axis label)
+  # dRMST uses a plotmath expression so the delta (Δ) symbol always renders,
+  # regardless of font/device (unicode escapes can silently drop on some devices)
+  measure_label <- if (measure == "RD") {
+    "Risk difference in %"
+  } else if (measure == "dRMST") {
+    bquote(bold(Delta * "RMST in months"))
+  } else if (measure == "RR") {
+    "Risk ratio"
+  } else {
+    "Hazard ratio"
+  }
+  
   # effect plot
   plot <- ggplot2::ggplot(estimates_df,
                           ggplot2::aes(x = effect_modifier_range, y = get(measure))) +
@@ -600,42 +614,44 @@ effect_plot <- function(estimates_df,
     ) +
     ggplot2::scale_y_continuous(limits = c(y_min, y_max), breaks = y_breaks) +
     ggplot2::labs(x = ifelse(effect_modifier == "age", "Age in years", "Predicted 2-year mortality risk (%)"),
-                  y = ifelse(
-                    measure == "RD",
-                    "Risk difference in %",
-                    ifelse(measure == "dRMST", "\u0394RMST in months", 
-                           ifelse(measure == "RR", "Risk ratio", "Hazard ratio")
-                  ))) +
+                  y = NULL) +
+    ggplot2::ggtitle(measure_label) +
     ggplot2::theme_minimal() +
     ggplot2::theme(
       panel.grid = ggplot2::element_blank(),
       panel.background = ggplot2::element_rect(fill = "white", color = NA),
       plot.background = ggplot2::element_rect(fill = "white", color = NA),
       text = ggplot2::element_text(size = 18),
+      plot.title = ggplot2::element_text(hjust = 0.5, face = "bold"),
       axis.ticks.x = ggplot2::element_line(color = "black", linewidth = 0.5),
       axis.line.x = ggplot2::element_line(color = "black", linewidth = 0.5),
       axis.ticks.y = ggplot2::element_line(color = "black", linewidth = 0.5),
       axis.line.y = ggplot2::element_line(color = "black", linewidth = 0.5)
-    ) +
-    ggplot2::annotate(
-      "text",
-      x = x_min_text,
-      y = ifelse(measure == "dRMST", y_middle + padding_y, y_middle - padding_y),
-      label = "Favor dialysis",
-      angle = 90,
-      hjust = 1,
-      vjust = 0.5,
-      size = 6
-    ) +
-    ggplot2::annotate(
-      "segment",
-      x = x_min,
-      xend = x_min,
-      y = ifelse(measure == "dRMST", y_middle + padding_y, y_middle - padding_y),
-      yend = ifelse(measure == "dRMST", y_max, y_min),
-      arrow = ggplot2::arrow(length = ggplot2::unit(0.2, "cm")),
-      color = "black"
     )
+  
+  # add "favor dialysis" arrow + text indicator (optional)
+  if (show_favor_annotation) {
+    plot <- plot +
+      ggplot2::annotate(
+        "text",
+        x = x_min_text,
+        y = ifelse(measure == "dRMST", y_middle + padding_y, y_middle - padding_y),
+        label = "Favor dialysis",
+        angle = 90,
+        hjust = 1,
+        vjust = 0.5,
+        size = 6
+      ) +
+      ggplot2::annotate(
+        "segment",
+        x = x_min,
+        xend = x_min,
+        y = ifelse(measure == "dRMST", y_middle + padding_y, y_middle - padding_y),
+        yend = ifelse(measure == "dRMST", y_max, y_min),
+        arrow = ggplot2::arrow(length = ggplot2::unit(0.2, "cm")),
+        color = "black"
+      )
+  }
   
   # reverse y-axis for dRMST
   if (measure == "dRMST") {
@@ -662,7 +678,7 @@ create_histogram_stratified <- function(dt, var_name, trt_name, manual_colors) {
         "Predicted 2-year mortality risk (%)",
         "Age in years"
       ),
-      y = "Count"
+      y = NULL
     ) +
     ggplot2::scale_fill_manual(
       values = c("0" = manual_colors[1], "1" = manual_colors[2]),
