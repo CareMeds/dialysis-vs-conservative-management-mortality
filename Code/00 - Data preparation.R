@@ -100,6 +100,7 @@ snr_rrt <- unique(SOS_KRTDATA2024[, c(
   "county",
   "deathdate",
   "female",
+  "event_date",
   "krt_start",
   "krt_startdate",
   "modality_cat",
@@ -110,6 +111,7 @@ setnames(snr_rrt, "modality_cat", "krt_modality")
 snr_rrt[, `:=`(
   birthdate = as.IDate(birthdate, format("%d%b%Y")),
   DODSDAT = as.IDate(deathdate, format("%m/%d/%Y")),
+  event_date = as.IDate(event_date, format("%m/%d/%Y")),
   krt_startdate = as.IDate(krt_startdate, format("%d%b%Y"))
 )]
 
@@ -120,20 +122,6 @@ snr_rrt[LOPNR == 18316963, ]       # example
 
 # long snr RRT data
 snr_rrt_long <- copy(snr_rrt)
-
-# dup_check <- snr_rrt_long[, .N, by = LOPNR][N > 1, LOPNR]
-# 
-# snr_rrt_long[LOPNR %in% dup_check, .(
-#   n_rows        = .N,
-#   n_dates       = uniqueN(krt_startdate),
-#   n_modalities  = uniqueN(krt_modality)
-# ), by = LOPNR][, .(
-#   # patients where every duplicate row shares the same date
-#   only_same_date       = sum(n_dates == 1),
-#   # patients where duplicates span more than one date (real switches)
-#   spans_multiple_dates = sum(n_dates > 1)
-# )]
-
 save(snr_rrt_long, file = "Data/cleaned/snr_rrt_long.Rdata")
 
 # only keep krt_start == 1 information, this does not delete IDs

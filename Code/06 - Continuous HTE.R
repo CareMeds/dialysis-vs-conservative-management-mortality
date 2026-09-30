@@ -630,7 +630,7 @@ for (nr_analysis in 1:2) {
       results_path,
       ifelse(
         nr_analysis == 1,
-        "Main/Figure_4.pdf",
+        "Main/Figure_3.pdf",
         "Supplemental/Figure_S_HTE_DCS.png"
       )
     ),

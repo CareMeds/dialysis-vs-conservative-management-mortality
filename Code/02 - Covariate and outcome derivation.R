@@ -731,64 +731,38 @@ for (cohort_name in c("cohort", "elig_cohort")) {
     # ---- Build KRT (dialysis) modality periods per patient ----
     # snr_rrt can have multiple KRT rows per patient (e.g. a PD -> HD switch).
     # Keep all of them instead of just the first, and turn them into periods:
-    # each modality holds from its own krt_startdate until the NEXT switch.
+    # each modality holds from its own event_date until the NEXT switch.
     # Patients with no dialysis at all have no rows here, so they'll simply
     # get NA (never dialysis) when joined onto hosp_sub below.
     raw_krt_dt <- unique(snr_rrt_long[LOPNR %in% working_cohort$LOPNR &
                                         !is.na(krt_startdate) &
                                         !is.na(krt_modality),
-                                      c(id_name, "krt_modality", "krt_startdate"), with = FALSE])
+                                      c(id_name, "event_date", "krt_modality", "krt_startdate"), with = FALSE])
     
-    # --- UNTRACED -------------------------------------------------------------
-    # Assume untraced patients stay on their initial KRT modality
+    # Assume untraced patients (N=4) stay on their initial KRT modality
     long_cohort_krt <- raw_krt_dt[krt_modality != "UNTRACED"]
     
-    # --- RECOVERED ------------------------------------------------------------
-    # RECOVERED always coincides with another modality on the same date - drop it
-    long_cohort_krt <- long_cohort_krt[krt_modality != "RECOVERED"]
-    
-    # --- Same-date conflicts: HD > PD > TX -------------------------------------
-    # When multiple modalities are logged on the same date, keep HD if present,
-    # else PD, else TX (this also drops any lingering GRAFT FAILURE row, since
-    # it always coincides with one of these)
-    
-    # HD wins if present
-    HD_dates <- unique(long_cohort_krt[krt_modality == "HD", .(LOPNR, krt_startdate)])
-    long_cohort_krt[HD_dates, has_HD := TRUE, on = .(LOPNR, krt_startdate)]
-    long_cohort_krt <- long_cohort_krt[is.na(has_HD) | krt_modality == "HD"]
-    long_cohort_krt[, has_HD := NULL]
-    
-    # else PD wins if present
-    PD_dates <- unique(long_cohort_krt[krt_modality == "PD", .(LOPNR, krt_startdate)])
-    long_cohort_krt[PD_dates, has_PD := TRUE, on = .(LOPNR, krt_startdate)]
-    long_cohort_krt <- long_cohort_krt[is.na(has_PD) | krt_modality == "PD"]
-    long_cohort_krt[, has_PD := NULL]
-    
-    # else TX wins if present
-    tx_dates <- unique(long_cohort_krt[krt_modality == "TX", .(LOPNR, krt_startdate)])
-    long_cohort_krt[tx_dates, has_tx := TRUE, on = .(LOPNR, krt_startdate)]
-    long_cohort_krt <- long_cohort_krt[is.na(has_tx) | krt_modality == "TX"]
-    long_cohort_krt[, has_tx := NULL]
-    
-    # bring in each patient's followup_end (already computed on cohort_outcomes
-    # above - a patient can be on dialysis with no hospitalization at all, so
-    # this can't be sourced from hosp_sub, which only has hospitalized patients)
+    # --- Select only those that start before follow-up end --------------------
     long_cohort_krt <- unique(cohort_outcomes[, .(LOPNR, followup_end)])[long_cohort_krt, on = "LOPNR"]
+    long_cohort_krt <- long_cohort_krt[event_date <= followup_end]
     
-    # drop KRT events starting after this patient's own follow-up window -
-    # they can't affect anything we're modeling, and dropping them here means
-    # the fallback below is the ONLY thing bounding the true last in-window
-    # period, rather than a real switch date sometimes doing it instead
-    long_cohort_krt <- long_cohort_krt[krt_startdate <= followup_end]
+    # if previous modality is same, do not register new modality - sorted
+    # on event_date (not krt_startdate, which need not vary per switch),
+    # matching the column krt_start/krt_stop are built from below
+    setorder(long_cohort_krt, LOPNR, event_date)
+    long_cohort_krt[, prev_mod := shift(krt_modality, type = "lag"), by = LOPNR]
+    long_cohort_krt <- long_cohort_krt[is.na(prev_mod) | prev_mod != krt_modality]
+    long_cohort_krt[, prev_mod := NULL]
     
-    setorder(long_cohort_krt, LOPNR, krt_startdate)
+    # --- Start of KRT ---------------------------------------------------------
+    long_cohort_krt <- long_cohort_krt[, krt_start := event_date]
     
-    # the last period per patient has no "next" switch - bound it at
-    # followup_end instead of leaving it open (nothing past followup_end is
-    # ever used anyway, so this keeps krt_stopdate meaningful/non-NA
-    # whenever a patient has any dialysis at all)
-    long_cohort_krt[, krt_stopdate := shift(krt_startdate, type = "lead"), by = LOPNR]
-    long_cohort_krt[is.na(krt_stopdate), krt_stopdate := followup_end]
+    # --- End of KRT -----------------------------------------------------------
+    long_cohort_krt[, krt_stop := shift(event_date, type = "lead"), by = LOPNR]
+    long_cohort_krt[is.na(krt_stop), krt_stop := followup_end]
+    
+    # --- RECOVERED ------------------------------------------------------------
+    long_cohort_krt <- long_cohort_krt[krt_modality != "RECOVERED"]
     
     # save the long-format hospitalization + KRT tables for later use
     # (multi-state modeling of home/hospital/death transitions, PART 12)
