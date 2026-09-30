@@ -283,12 +283,28 @@ state_colors <- setNames(c(manual_colors[c(3, 2, 4, 1)], "#FF7F00"), state_level
 ### Figure: state probability (left) and state occupancy (right), by trt
 ################################################################################
 # only one panel keeps its legend (colors are shared)
-p_cum_dialysis    <- make_state_panel(state_prob_dt, state_colors, 1, "cumulative", show_legend = TRUE) +
+p_cum_dialysis    <- make_state_panel(state_prob_dt = state_prob_dt, 
+                                      state_colors = state_colors, 
+                                      trt_value = 1, 
+                                      type = "cumulative", 
+                                      show_legend = TRUE) +
   ggplot2::labs(title = "Choose dialysis")
-p_stack_dialysis  <- make_state_panel(state_prob_dt, state_colors, 1, "stacked", show_legend = FALSE)
-p_cum_cm          <- make_state_panel(state_prob_dt, state_colors, 0, "cumulative", show_legend = FALSE) +
+p_stack_dialysis  <- make_state_panel(state_prob_dt = state_prob_dt, 
+                                      state_colors = state_colors, 
+                                      trt_value = 1, 
+                                      type = "stacked", 
+                                      show_legend = FALSE)
+p_cum_cm          <- make_state_panel(state_prob_dt = state_prob_dt, 
+                                      state_colors = state_colors, 
+                                      trt_value = 0, 
+                                      type = "cumulative",
+                                      show_legend = FALSE) +
   ggplot2::labs(title = "Choose conservative management")
-p_stack_cm        <- make_state_panel(state_prob_dt, state_colors, 0, "stacked", show_legend = FALSE)
+p_stack_cm        <- make_state_panel(state_prob_dt = state_prob_dt, 
+                                      state_colors = state_colors, 
+                                      trt_value = 0, 
+                                      type = "stacked",
+                                      show_legend = FALSE)
 
 ################################################################################
 ### Annotate the state-probability panels
@@ -296,8 +312,20 @@ p_stack_cm        <- make_state_panel(state_prob_dt, state_colors, 0, "stacked",
 # annotation includes In-center (a subset of other states, so text only, not a curve)
 # rows after the header of the "confounding and censoring" block: Dialysis, then CM
 final_block_row <- which(Bootstrap_CI_dt$trt == "Adjusted for confounding and censoring")
-p_cum_dialysis <- annotate_state_probability(p = p_cum_dialysis, table = Bootstrap_CI_dt[final_block_row + 1, state_cols_in_center, with = FALSE], state_prob_dt = state_prob_dt)
-p_cum_cm <- annotate_state_probability(p = p_cum_cm, table = Bootstrap_CI_dt[final_block_row + 2, state_cols_in_center, with = FALSE], state_prob_dt = state_prob_dt)
+p_cum_dialysis <- annotate_state_probability(
+  p              = p_cum_dialysis,
+  estimate_ci_dt = estimate_ci_dt,
+  trt_value      = 1,
+  state_cols     = state_cols_in_center,
+  state_prob_dt  = state_prob_dt
+)
+p_cum_cm <- annotate_state_probability(
+  p              = p_cum_cm,
+  estimate_ci_dt = estimate_ci_dt,
+  trt_value      = 0,
+  state_cols     = state_cols_in_center,
+  state_prob_dt  = state_prob_dt
+)
 
 combined_plot <- (p_cum_dialysis | p_stack_dialysis) /
   (p_cum_cm | p_stack_cm) +
@@ -315,4 +343,3 @@ ggplot2::ggsave(
   height = 8,
   dpi = 300
 )
-
