@@ -157,7 +157,7 @@ Sensitivity analysis for unmeasured confounding. Shows which combinations of the
 ### 11 - Supplemental Figure HTE
 Creates a figure illustrating the mathematical relationship between absolute and relative heterogeneity of treatment effect.
 
-### 12 - SA home time *(new)*
+### 12 - SA home time 
 Sensitivity analysis estimating how the 2-year period after the treatment decision is spent, using a multi-state model with the states **At home**, **Hospitalization**, **Hemodialysis (HD)**, **Peritoneal dialysis (PD)** and **Death**.
 
 1. Build a long (patient-day) dataset of hospitalizations and kidney replacement therapy, and count the number of patients per transition.
@@ -169,7 +169,7 @@ Sensitivity analysis estimating how the 2-year period after the treatment decisi
 
 Outputs: `Table_S_n_per_transition.xlsx`, `Table_S_home_time_estimates.xlsx` (bootstrap CI, pooled estimate, and one sheet per imputation), and `Figure_S_home_time.png`.
 
-### 13 - Subgroup analysis *(new)*
+### 13 - Subgroup analysis 
 Estimates treatment effects (unweighted and IPTW) within subgroups, reported in the same format as the main results table (sample size, number of events, risk, risk difference, risk ratio, RMST, difference in RMST, hazard ratio):
 1. **Age**: <80 versus ≥80 years
 2. **Dialysis type**: HD versus PD (each compared against all patients choosing conservative management)
