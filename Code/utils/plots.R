@@ -932,6 +932,7 @@ make_state_panel <- function(state_prob_dt,
   p <- p +
     ggplot2::scale_y_continuous(breaks = seq(0, 800, by = 100)) +
     ggplot2::scale_x_continuous(breaks = seq(0, 2, by = 0.5)) +
+    ggplot2::coord_cartesian(ylim = c(0, 800)) +
     ggplot2::labs(
       x = "Time (years)",
       y = "Mean cumulative days per patient"
@@ -948,25 +949,37 @@ make_state_panel <- function(state_prob_dt,
 # it still appears as a curve/area in the panel itself). state_prob_dt sets the
 # y-position of the annotation.
 annotate_state_probability <- function(p,
-                                       table,
-                                       state_prob_dt) {
+                                       estimate_ci_dt,
+                                       trt_value,
+                                       state_cols,
+                                       state_prob_dt,
+                                       adj = "Adjusted for confounding and censoring",
+                                       days_per_month = 30.5,
+                                       y_top = 800,
+                                       text_size = 3.5,
+                                       month_x = 1) {
+  est <- estimate_ci_dt[as.character(trt) == as.character(trt_value) &
+                          adjustment == adj &
+                          state %in% state_cols]
+  est <- est[match(state_cols, state)]
+  
+  days_txt   <- fmt_ci(est$estimate, est$lower, est$upper, digits = 0)
+  months_txt <- fmt_ci(est$estimate / days_per_month,
+                       est$lower    / days_per_month,
+                       est$upper    / days_per_month,
+                       digits = 1)
+  
   p +
     ggplot2::annotate(
-      "text",
-      x = 0,
-      y = max(state_prob_dt$mean_cumulative_days),
-      hjust = 0,
-      vjust = 1,
-      size = 3,
-      label = paste0("At 2 years\n", paste(names(table), collapse = "\n"))
+      "text", x = 0, y = y_top, hjust = 0, vjust = 1, size = text_size, lineheight = 0.95,
+      label = paste0("At 2 years\n", paste(state_cols, collapse = "\n"))
     ) +
     ggplot2::annotate(
-      "text",
-      x = 0.5,
-      y = max(state_prob_dt$mean_cumulative_days),
-      hjust = 0,
-      vjust = 1,
-      size = 3,
-      label = paste0("days\n", paste(table, collapse = "\n"))
+      "text", x = 0.5, y = y_top, hjust = 0, vjust = 1, size = text_size, lineheight = 0.95,
+      label = paste0("days\n", paste(days_txt, collapse = "\n"))
+    ) +
+    ggplot2::annotate(
+      "text", x = month_x, y = y_top, hjust = 0, vjust = 1, size = text_size, lineheight = 0.95,
+      label = paste0("months\n", paste(months_txt, collapse = "\n"))
     )
 }
