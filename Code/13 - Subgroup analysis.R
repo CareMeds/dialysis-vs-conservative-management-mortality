@@ -28,13 +28,14 @@ source("Code/utils/compute_absolute_relative_risks.R")
 
 # load data
 load("Data/cohort_with_prob.Rdata")
+n_bootstraps <- 10
 
 # -----------------------------
 # Build a results table for one subgroup, in the same row-by-row
 # format as the main results_df table in 05_-_ATE.R (Sample size,
 # Number of events, Risk, Risk difference, Risk ratio, RMST, dRMST, HR).
 # -----------------------------
-for (w_meth in w_meths[1:2]) {
+for (w_meth in w_meths[2]) {
   # Set weights: use 1 for unweighted, otherwise use specified weights
   if (w_meth == "unweighted") {
     weights_meth <- rep(1, nrow(baseline))
@@ -95,8 +96,8 @@ for (w_meth in w_meths[1:2]) {
 
 openxlsx::write.xlsx(
   rbind(
-    cbind(table_unweighted_age_old[-2, ], table_IPTW_age_old[-2, ]),
-    cbind(table_unweighted_age_young[-2, ], table_IPTW_age_young[-2, ])
+    table_IPTW_age_old[-c(1:2), ],
+    table_IPTW_age_young[-c(1:2), ]
   ),
   rowNames = TRUE,
   file = paste0(results_path, "Supplemental/Table_S_HTE_subgroup_age.xlsx")
@@ -104,14 +105,8 @@ openxlsx::write.xlsx(
 
 openxlsx::write.xlsx(
   rbind(
-    cbind(
-      table_unweighted_dialysis_type_HD[-2, ],
-      table_IPTW_dialysis_type_HD[-2, ]
-    ),
-    cbind(
-      table_unweighted_dialysis_type_PD[-2, ],
-      table_IPTW_dialysis_type_PD[-2, ]
-    )
+      table_IPTW_dialysis_type_HD[-c(1:2), ],
+      table_IPTW_dialysis_type_PD[-c(1:2), ]
   ),
   rowNames = TRUE,
   file = paste0(

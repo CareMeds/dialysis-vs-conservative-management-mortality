@@ -35,7 +35,7 @@ load("Data/cohort_with_models.Rdata")
 ### Internal 2-year time-to-event risk model
 ################################################################################
 # perform internal validation 
-validate <- FALSE
+validate <- TRUE
 
 # make outcome for elig cohort
 elig_Surv <- survival::Surv(elig_cohort$time2event_death_2y, elig_cohort$event_death_2y)

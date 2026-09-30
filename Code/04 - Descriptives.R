@@ -602,9 +602,9 @@ openxlsx::write.xlsx(
   file = paste0(results_path, "Supplemental/Table_S_descriptives_all.xlsx")
 )
 openxlsx::write.xlsx(
-  cbind(table_HD_PD_unweighted, 
+  cbind(table_HD_PD_unweighted[, -1], 
         rep("", nrow(table_HD_PD_unweighted)),
-        table_HD_PD_IPTW),
+        table_HD_PD_IPTW[, -1]),
   rowNames = TRUE,
   file = paste0(
     results_path,

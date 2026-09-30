@@ -88,7 +88,7 @@ bl <- build_baseline_long(long_cohort_hosp,
 
 write.xlsx(
   bl$transition_n_dt,
-  file = paste0(results_path, "Supplemental/Table_S_n_per_transition.xlsx")
+  file = paste0(results_path, "Supplemental/Table_M_n_per_transition.xlsx")
 )
 
 # states in reporting order (not alphabetical); sets the column order of tables
