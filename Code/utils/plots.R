@@ -876,3 +876,97 @@ plot_metric <- function(df,
   
   return(plot)
 }
+
+# Builds one panel of Figure 3 for a given treatment arm: a "cumulative"
+# line panel (mean cumulative days per state, overlapping lines, with a
+# shaded bootstrap CI ribbon if state_prob_dt has lower/upper columns) or
+# a "stacked" panel (no CI - the same mean cumulative days per state,
+# stacked as an area, so the total height is the sum across all 5
+# states). One panel per (trt, plot type), built manually (not
+# facet_wrap) so the layout is controlled directly: dialysis on top,
+# conservative management below; cumulative left, stacked right.
+make_state_panel <- function(state_prob_dt,
+                             state_colors,
+                             trt_value,
+                             type = c("cumulative", "stacked"),
+                             show_legend = TRUE) {
+  type <- match.arg(type)
+  dt <- state_prob_dt[trt == trt_value]
+  
+  p <- if (type == "cumulative") {
+    p <- ggplot2::ggplot(dt,
+                         ggplot2::aes(
+                           x = time / 365,
+                           y = mean_cumulative_days,
+                           color = state
+                         ))
+    if (all(c("lower", "upper") %in% names(dt))) {
+      p <- p +
+        ggplot2::geom_ribbon(
+          ggplot2::aes(ymin = lower, ymax = upper, fill = state),
+          alpha = 0.2,
+          color = NA,
+          show.legend = FALSE
+        ) +
+        ggplot2::scale_fill_manual(values = state_colors, guide = "none")
+    }
+    p +
+      ggplot2::geom_line(linewidth = 1) +
+      ggplot2::scale_color_manual(values = state_colors, name = "State")
+  } else {
+    ggplot2::ggplot(dt,
+                    ggplot2::aes(
+                      x = time / 365,
+                      y = mean_cumulative_days,
+                      fill = state
+                    )) +
+      ggplot2::geom_area(
+        position = "stack",
+        linewidth = 0.2,
+        alpha = 0.85,
+        show.legend = FALSE
+      ) +
+      ggplot2::scale_fill_manual(values = state_colors, name = "State")
+  }
+  
+  p <- p +
+    ggplot2::scale_y_continuous(breaks = seq(0, 800, by = 100)) +
+    ggplot2::scale_x_continuous(breaks = seq(0, 2, by = 0.5)) +
+    ggplot2::labs(
+      x = "Time (years)",
+      y = "Mean cumulative days per patient"
+    ) +
+    ggplot2::theme_bw() +
+    ggplot2::theme(panel.grid = ggplot2::element_blank(),
+                   panel.border = ggplot2::element_blank(),
+                   axis.line    = ggplot2::element_line(colour = "black", linewidth = 0.5))
+}
+
+# Adds the "At 2 years: days / months per state" text annotation to a
+# cumulative-days panel, using the confounding+censoring-corrected
+# estimates throughout (Death is excluded from this text annotation only -
+# it still appears as a curve/area in the panel itself). state_prob_dt sets the
+# y-position of the annotation.
+annotate_state_probability <- function(p,
+                                       table,
+                                       state_prob_dt) {
+  p +
+    ggplot2::annotate(
+      "text",
+      x = 0,
+      y = max(state_prob_dt$mean_cumulative_days),
+      hjust = 0,
+      vjust = 1,
+      size = 3,
+      label = paste0("At 2 years\n", paste(names(table), collapse = "\n"))
+    ) +
+    ggplot2::annotate(
+      "text",
+      x = 0.5,
+      y = max(state_prob_dt$mean_cumulative_days),
+      hjust = 0,
+      vjust = 1,
+      size = 3,
+      label = paste0("days\n", paste(table, collapse = "\n"))
+    )
+}

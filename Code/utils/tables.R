@@ -22,11 +22,11 @@ extract_proportion <- function(entry) {
 
 # Function to compute SMD for each category of a categorical variable
 create_baseline_table <- function(data,
-                                  id_name, 
+                                  id_name,
                                   weights = NULL,
                                   vars,
                                   categoricalVars,
-                                  continuousVars, 
+                                  continuousVars,
                                   IQRVars = NULL,
                                   treatmentColumn = NULL,
                                   treatmentLabel = NULL,
@@ -42,8 +42,10 @@ create_baseline_table <- function(data,
   # the fact. For columns already coded with the display values themselves
   # (like dialysis_type == "HD"/"PD"), pass treatmentValue/controlValue
   # explicitly.
-  if (is.null(treatmentValue)) treatmentValue <- "1"
-  if (is.null(controlValue)) controlValue <- "0"
+  if (is.null(treatmentValue))
+    treatmentValue <- "1"
+  if (is.null(controlValue))
+    controlValue <- "0"
   # extract IDs
   data <- copy(data)
   data[, ID := get(id_name)]
@@ -83,10 +85,7 @@ create_baseline_table <- function(data,
   )
   
   # Only apply to rows belonging to categorical variables
-  cont_rows <- grepl(
-    paste0("^(", paste(continuousVars, collapse = "|"), ")"),
-    trimws(rownames(table_overall))
-  )
+  cont_rows <- grepl(paste0("^(", paste(continuousVars, collapse = "|"), ")"), trimws(rownames(table_overall)))
   rn <- rownames(table_overall)
   table_overall[!cont_rows, ] <- apply(table_overall[!cont_rows, , drop = FALSE], 2, fix_counts)
   rownames(table_overall) <- rn
@@ -133,29 +132,34 @@ create_baseline_table <- function(data,
     )
     
     # Only apply to rows belonging to categorical variables
-    cont_rows <- grepl(
-      paste0("^(", paste(continuousVars, collapse = "|"), ")"),
-      trimws(rownames(table_stratified))
-    )
+    cont_rows <- grepl(paste0("^(", paste(continuousVars, collapse = "|"), ")"), trimws(rownames(table_stratified)))
     rn <- rownames(table_stratified)
     table_stratified_rounded <- table_stratified
     table_stratified_rounded[!cont_rows, ] <- apply(table_stratified[!cont_rows, , drop = FALSE], 2, fix_counts)
     rownames(table_stratified_rounded) <- rn
     
     # Keep treatment, control, and SMD columns
-    missing_vals <- setdiff(c(treatmentValue, controlValue), colnames(table_stratified_rounded))
+    missing_vals <- setdiff(c(treatmentValue, controlValue),
+                            colnames(table_stratified_rounded))
     if (length(missing_vals) > 0) {
       stop(
         "create_baseline_table: could not find column(s) ",
         paste(sprintf('"%s"', missing_vals), collapse = ", "),
-        " in the stratified table produced from treatmentColumn = \"", treatmentColumn, "\".\n",
-        "Available columns are: ", paste(sprintf('"%s"', colnames(table_stratified_rounded)), collapse = ", "), ".\n",
-        "Pass treatmentValue/controlValue matching the ACTUAL values in `", treatmentColumn, "` ",
+        " in the stratified table produced from treatmentColumn = \"",
+        treatmentColumn,
+        "\".\n",
+        "Available columns are: ",
+        paste(sprintf(
+          '"%s"', colnames(table_stratified_rounded)
+        ), collapse = ", "),
+        ".\n",
+        "Pass treatmentValue/controlValue matching the ACTUAL values in `",
+        treatmentColumn,
+        "` ",
         "(treatmentLabel/controlLabel are only used to relabel the output columns)."
       )
     }
-    table_stratified <- as.matrix(cbind(table_stratified_rounded[, c(treatmentValue, controlValue)],
-                                        table_stratified[, "SMD"]))
+    table_stratified <- as.matrix(cbind(table_stratified_rounded[, c(treatmentValue, controlValue)], table_stratified[, "SMD"]))
     
     # Optional row labels
     if (!is.null(tableRowLabels) && length(tableRowLabels) > 1) {
@@ -262,11 +266,9 @@ insert_section_breaks <- function(tbl, section_sizes) {
   # become the leftmost label column via write.xlsx(..., rowNames = TRUE)),
   # while still visually separating sections the same way a blank row did
   header_row <- function(name) {
-    matrix(
-      rep("", ncol(tbl)),
-      nrow = 1,
-      dimnames = list(name, colnames(tbl))
-    )
+    matrix(rep("", ncol(tbl)),
+           nrow = 1,
+           dimnames = list(name, colnames(tbl)))
   }
   
   out <- rbind(header_row(section_names[1]), pieces[[1]])
@@ -324,20 +326,24 @@ create_table_with_ci <- function(data_absolute_risks,
 # Formula: sum(w * (x - mu)^2) / (sum(w) - sum(w^2)/sum(w))
 # Note: If all w=1, this reduces to sum(x-mu)^2 / (N-1), which is standard var()
 calc_wvar <- function(x, w, wm) {
-  sum(w * (x - wm)^2) / (sum(w) - sum(w^2)/sum(w))
+  sum(w * (x - wm)^2) / (sum(w) - sum(w^2) / sum(w))
 }
 
 # Helper: Weighted Covariance Matrix & Means
 get_wstats <- function(v, w, levs) {
-  if(length(v) == 0) return(NULL)
+  if (length(v) == 0)
+    return(NULL)
   
   # Dummy Matrix (rows=obs, cols=levels)
-  mat <- t(sapply(v, function(x) as.numeric(levs == x)))
-  if(nrow(mat) == 1) mat <- t(mat)
+  mat <- t(sapply(v, function(x)
+    as.numeric(levs == x)))
+  if (nrow(mat) == 1)
+    mat <- t(mat)
   colnames(mat) <- levs
   
   # Remove last column (k-1 degrees of freedom)
-  if (ncol(mat) > 1) mat <- mat[, -ncol(mat), drop = FALSE]
+  if (ncol(mat) > 1)
+    mat <- mat[, -ncol(mat), drop = FALSE]
   
   # Weighted Means (Proportions)
   w_props <- colSums(mat * w) / sum(w)
@@ -346,7 +352,7 @@ get_wstats <- function(v, w, levs) {
   mat_centered <- sweep(mat, 2, w_props, "-")
   
   # Weighted Covariance: (X' W X) / (sum(w) - correction)
-  mat_weighted <- mat_centered * sqrt(w) 
+  mat_weighted <- mat_centered * sqrt(w)
   CovMat <- crossprod(mat_weighted)
   denom <- sum(w) - (sum(w^2) / sum(w))
   
@@ -354,7 +360,6 @@ get_wstats <- function(v, w, levs) {
 }
 
 calculate_smd <- function(vec1, vec2, w1 = NULL, w2 = NULL) {
-  
   # --- 1. Robust Input Handling ---
   # Convert inputs to simple vectors to handle data.table columns or lists
   vec1 <- unlist(as.vector(vec1))
@@ -362,22 +367,29 @@ calculate_smd <- function(vec1, vec2, w1 = NULL, w2 = NULL) {
   
   # --- 2. Handle Weights ---
   # If weights are missing (NULL), assign 1 to everyone (Unweighted mode)
-  if (is.null(w1)) w1 <- rep(1, length(vec1))
-  else w1 <- unlist(as.vector(w1))
+  if (is.null(w1))
+    w1 <- rep(1, length(vec1))
+  else
+    w1 <- unlist(as.vector(w1))
   
-  if (is.null(w2)) w2 <- rep(1, length(vec2))
-  else w2 <- unlist(as.vector(w2))
+  if (is.null(w2))
+    w2 <- rep(1, length(vec2))
+  else
+    w2 <- unlist(as.vector(w2))
   
   # --- 3. Clean NAs (Synchronized) ---
   # Remove observations where either Data OR Weight is NA
   valid1 <- !is.na(vec1) & !is.na(w1)
-  vec1 <- vec1[valid1]; w1 <- w1[valid1]
+  vec1 <- vec1[valid1]
+  w1 <- w1[valid1]
   
   valid2 <- !is.na(vec2) & !is.na(w2)
-  vec2 <- vec2[valid2]; w2 <- w2[valid2]
+  vec2 <- vec2[valid2]
+  w2 <- w2[valid2]
   
   # Stop if empty
-  if (length(vec1) < 2 || length(vec2) < 2) return(NA)
+  if (length(vec1) < 2 || length(vec2) < 2)
+    return(NA)
   
   # --- 4. Logic Switch: Numeric vs Categorical ---
   is_numeric <- is.numeric(vec1) && is.numeric(vec2)
@@ -409,7 +421,8 @@ calculate_smd <- function(vec1, vec2, w1 = NULL, w2 = NULL) {
     res1 <- get_wstats(v1_char, w1, all_levs)
     res2 <- get_wstats(v2_char, w2, all_levs)
     
-    if (is.null(res1) || is.null(res2)) return(NA)
+    if (is.null(res1) || is.null(res2))
+      return(NA)
     
     # Pooled Covariance
     S_pooled <- (res1$cov + res2$cov) / 2
@@ -420,7 +433,8 @@ calculate_smd <- function(vec1, vec2, w1 = NULL, w2 = NULL) {
     # Calculate D^2
     dist_sq <- tryCatch({
       t(diff_p) %*% solve(S_pooled) %*% diff_p
-    }, error = function(e) return(NA))
+    }, error = function(e)
+      return(NA))
     
     smd <- sqrt(abs(dist_sq))
     smd <- as.numeric(smd)
@@ -432,21 +446,21 @@ calculate_smd <- function(vec1, vec2, w1 = NULL, w2 = NULL) {
 risk_model_table <- function(model_cox,
                              predictor_labels,
                              horizon,
-                             digits = 2) {
+                             digits = 3) {
   # ── Validate labels match model terms ───────────────────────────────────────
   model_terms <- broom::tidy(model_cox) |> dplyr::pull(term)
   
   # ── Coefficient and HR table ────────────────────────────────────────────────
   predictor_rows <- dplyr::left_join(
     broom::tidy(model_cox, exponentiate = FALSE, conf.int = TRUE),
-    broom::tidy(model_cox, exponentiate = TRUE,  conf.int = TRUE),
+    broom::tidy(model_cox, exponentiate = TRUE, conf.int = TRUE),
     by     = "term",
     suffix = c("_log", "_hr")
   ) |>
     dplyr::mutate(
       Predictor = predictor_labels,
       coef_CI   = fmt_ci(estimate_log, conf.low_log, conf.high_log, digits = digits),
-      HR_CI     = fmt_ci(estimate_hr,  conf.low_hr,  conf.high_hr,  digits = digits),
+      HR_CI     = fmt_ci(estimate_hr, conf.low_hr, conf.high_hr, digits = digits),
       Wald      = fmt(statistic_log^2)  # z² = Wald chi-square (1 df)
     ) |>
     dplyr::select(Predictor, coef_CI, HR_CI, Wald)
@@ -464,7 +478,14 @@ risk_model_table <- function(model_cox,
   
   risk_model_table <- rbind(baseline_row, predictor_rows)
   
-  return(list(h0 = h0, coef = coefficients(model_cox), centers = model_cox$means, risk_model_table = risk_model_table))
+  return(
+    list(
+      h0 = h0,
+      coef = coefficients(model_cox),
+      centers = model_cox$means,
+      risk_model_table = risk_model_table
+    )
+  )
 }
 
 # Build a table for results
@@ -487,14 +508,12 @@ build_results_table <- function(data,
                     paste("Weighting", w_meth)), ] <- rep("", 2)
   
   # Sample size
-  results_df["Sample size", ] <- c(sum(data[[trt_var]] == 0),
-                                   sum(data[[trt_var]] == 1))
+  results_df["Sample size", ] <- c(sum(data[[trt_var]] == 0), sum(data[[trt_var]] == 1))
   
   # Number of events
-  results_df["Number of events", ] <- c(
-    sum(data[[outcome_var]] == 1 & data[[trt_var]] == 0),
-    sum(data[[outcome_var]] == 1 & data[[trt_var]] == 1)
-  )
+  results_df["Number of events", ] <- c(sum(data[[outcome_var]] == 1 &
+                                              data[[trt_var]] == 0), sum(data[[outcome_var]] == 1 &
+                                                                           data[[trt_var]] == 1))
   
   # Absolute risks
   results_df[paste("Risk, % (95% CI)", w_meth), ] <- c(
@@ -503,16 +522,12 @@ build_results_table <- function(data,
   )
   
   # Risk difference
-  results_df[paste("Risk difference, % (95% CI)", w_meth), ] <- c(
-    "Reference",
-    fmt_ci(out_est$RD * 100, out_est$RD_lower * 100, out_est$RD_upper * 100)
-  )
+  results_df[paste("Risk difference, % (95% CI)", w_meth), ] <- c("Reference",
+                                                                  fmt_ci(out_est$RD * 100, out_est$RD_lower * 100, out_est$RD_upper * 100))
   
   # Risk ratio
-  results_df[paste("Risk ratio (95% CI)", w_meth), ] <- c(
-    "Reference",
-    fmt_ci(out_est$RR, out_est$RR_lower, out_est$RR_upper, 2)
-  )
+  results_df[paste("Risk ratio (95% CI)", w_meth), ] <- c("Reference",
+                                                          fmt_ci(out_est$RR, out_est$RR_lower, out_est$RR_upper, 2))
   
   # RMST
   results_df[paste0("RMST, ", unit, " (95% CI) ", w_meth), ] <- c(
@@ -521,16 +536,174 @@ build_results_table <- function(data,
   )
   
   # RMST difference
-  results_df[paste0("\u0394RMST, ", unit, " (95% CI) ", w_meth), ] <- c(
-    "Reference",
-    fmt_ci(out_est$dRMST, out_est$dRMST_lower, out_est$dRMST_upper)
-  )
+  results_df[paste0("\u0394RMST, ", unit, " (95% CI) ", w_meth), ] <- c("Reference",
+                                                                        fmt_ci(out_est$dRMST, out_est$dRMST_lower, out_est$dRMST_upper))
   
   # Hazard ratio
-  results_df[paste("HR (95% CI)", w_meth), ] <- c(
-    "Reference",
-    fmt_ci(out_est$HR, out_est$HR_lower, out_est$HR_upper, 2)
-  )
+  results_df[paste("HR (95% CI)", w_meth), ] <- c("Reference",
+                                                  fmt_ci(out_est$HR, out_est$HR_lower, out_est$HR_upper, 2))
   
   return(results_df)
+}
+
+# Computes all four adjustment-level estimates (unadjusted / confounding
+# only / censoring only / both) as one long table: trt, state,
+# adjustment, value. Shared by build_estimate_table_dt() (the real,
+# non-bootstrapped point estimate) and the bootstrap loop (once per
+# replicate, so each adjustment level gets its own CI).
+compute_all_estimates <- function(days_per_patient_imputed,
+                                  days_per_patient,
+                                  iptw_dt,
+                                  state_cols,
+                                  in_center_cols) {
+  ests <- list(
+    "Unadjusted"                             = days_per_patient[, lapply(.SD, mean), 
+                                                                by = trt, 
+                                                                .SDcols = state_cols],
+    "Adjusted for confounding only"          = weighted_state_means(days_per_patient, 
+                                                                    iptw_dt,
+                                                                    state_cols),
+    "Adjusted for censoring only"            = days_per_patient_imputed[, lapply(.SD, mean),
+                                                                        by = trt, 
+                                                                        .SDcols = state_cols],
+    "Adjusted for confounding and censoring" = weighted_state_means(days_per_patient_imputed, 
+                                                                    iptw_dt, 
+                                                                    state_cols)
+  )
+  long_dt <- rbindlist(lapply(names(ests), function(adj) {
+    long <- melt(
+      ests[[adj]],
+      id.vars = "trt",
+      variable.name = "state",
+      value.name = "value"
+    )
+    long[, adjustment := adj]
+    long
+  }))
+  long_dt[, `:=`(trt = as.character(trt), 
+                 state = as.character(state))]
+  
+  # Dialysis - Conservative management difference, added as trt "diff".
+  # Computed here so every caller (the real analysis and each bootstrap
+  # replicate) gets the difference taken within the same replicate
+  diff_dt <- dcast(long_dt, state + adjustment ~ trt, value.var = "value")
+  diff_dt <- diff_dt[, .(trt = "diff", state, adjustment, value = `1` - `0`)]
+  long_dt <- rbind(long_dt, diff_dt, use.names = TRUE)
+  
+  # In-center days as % of days alive: ratio of the (weighted) means, per arm,
+  # and for "diff" the difference in in-center days / difference in days alive.
+  # Added as an extra "state" so it gets its CI like the other estimates
+  alive_cols <- setdiff(state_cols, c("Death", in_center_cols))
+  pct_dt <- long_dt[, .(state = "In-center %", value = 100 * value[state == "In-center"] / sum(value[state %in% alive_cols])), by = .(trt, adjustment)]
+  
+  # In-center days as % of days after starting dialysis: dialysis arm only (not
+  # defined for conservative management, and so not for the difference)
+  after_dt <- long_dt[trt == "1", .(trt = "1",
+                                    state = "In-center % after dialysis",
+                                    value = 100 * value[state == "In-center after dialysis"] /
+                                      value[state == "Days after dialysis"]), by = adjustment]
+  rbind(long_dt, pct_dt, after_dt, use.names = TRUE)
+}
+
+# Builds the 4-block (unadjusted / confounding only / censoring only /
+# both) estimate table from a given days_per_patient_imputed table - used
+# below for both the pooled (averaged-across-M) version and each
+# imputation's own unpooled version, one sheet per call.
+# With after_dialysis = TRUE two columns are added (dialysis arm only, empty for
+# conservative management): mean in-center days after starting dialysis, and that
+# as a % of the mean days after starting dialysis (ratio of means, as in
+# compute_all_estimates()). state_cols must contain in_center_cols.
+build_estimate_table_dt <- function(days_per_patient_imputed,
+                                    days_per_patient,
+                                    iptw_dt,
+                                    state_cols,
+                                    table_state_cols,
+                                    after_dialysis = TRUE) {
+  est_unadjusted <- days_per_patient[, lapply(.SD, mean), by = trt, .SDcols = state_cols]
+  est_confounding_only <- weighted_state_means(days_per_patient, iptw_dt, state_cols)
+  est_censoring_only <- days_per_patient_imputed[, lapply(.SD, mean), by = trt, .SDcols = state_cols]
+  est_confounding_and_censoring <- weighted_state_means(days_per_patient_imputed, iptw_dt, state_cols)
+  
+  # rounded table for one adjustment level, plus the after-dialysis columns
+  make_block <- function(est) {
+    out <- round_state_cols(est, table_state_cols)
+    if (after_dialysis) {
+      is_dialysis <- as.character(est$trt) == "1"
+      # empty spacer column (for formatting) before the after-dialysis columns
+      out[, ` ` := NA_character_]
+      out[, `In-center after dialysis (days)` := ifelse(is_dialysis, round(est[["In-center after dialysis"]], 0), NA_real_)]
+      out[, `In-center (% of days after starting dialysis)` := ifelse(is_dialysis, round(100 * est[["In-center after dialysis"]] / est[["Days after dialysis"]], 1), NA_real_)]
+    }
+    out
+  }
+  
+  rbind(
+    data.table(trt = "Unadjusted"),
+    make_block(est_unadjusted),
+    data.table(trt = "Adjusted for confounding only"),
+    make_block(est_confounding_only),
+    data.table(trt = "Adjusted for censoring only"),
+    make_block(est_censoring_only),
+    data.table(trt = "Adjusted for confounding and censoring"),
+    make_block(est_confounding_and_censoring),
+    fill = TRUE
+  )
+}
+
+# Builds the same 4-block (unadjusted / confounding only / censoring only
+# / both) layout as build_estimate_table_dt(), but from a long-format
+# (trt, state, adjustment, estimate, lower, upper) CI table, with each
+# cell "estimate (lower, upper)" via fmt_ci(). Rows are Dialysis, then
+# Conservative management, then Difference within every block; trt_labels
+# maps the trt codes ("1", "0", "diff") to those display labels.
+# With extra_cols = TRUE, three columns follow table_state_cols (when their states
+# are present in estimate_ci_dt): In-center as % of days alive; in-center days after
+# starting dialysis; and that as a % of days after starting dialysis. The last two
+# are only defined for the dialysis arm, so they are empty for conservative
+# management and Difference. Percentages show 1 decimal.
+build_ci_table_dt <- function(estimate_ci_dt,
+                              table_state_cols,
+                              trt_labels = c(`1` = "Dialysis", `0` = "Conservative management", diff = "Difference"),
+                              digits = 0,
+                              extra_cols = TRUE) {
+  estimate_ci_dt <- copy(estimate_ci_dt)
+  estimate_ci_dt[, formatted := fmt_ci(estimate, lower, upper, digits = digits)]
+  
+  # percentages: 1 decimal with % sign
+  pct_states <- c("In-center %", "In-center % after dialysis")
+  estimate_ci_dt[state %in% pct_states, formatted := sprintf("%.1f%% (%.1f, %.1f)", estimate, lower, upper)]
+  
+  # after-dialysis measures are dialysis arm only
+  after_states <- c("In-center after dialysis", "In-center % after dialysis")
+  estimate_ci_dt[state %in% after_states &
+                   trt != "1", formatted := NA_character_]
+  
+  # extra columns: state name -> column label
+  extra_map <- c(
+    "In-center %"                = "In-center (% of days alive)",
+    " "                          = " ",  # empty spacer column (for formatting)
+    "In-center after dialysis"   = "In-center after dialysis (days)",
+    "In-center % after dialysis" = "In-center (% of days after starting dialysis)"
+  )
+  
+  adjustments <- c(
+    "Unadjusted",
+    "Adjusted for confounding only",
+    "Adjusted for censoring only",
+    "Adjusted for confounding and censoring"
+  )
+  
+  rbindlist(lapply(adjustments, function(adj) {
+    wide <- dcast(estimate_ci_dt[adjustment == adj], trt ~ state, value.var = "formatted")
+    wide <- wide[match(names(trt_labels), trt)]
+    wide[, trt := trt_labels[trt]]
+    wide[, ` ` := NA_character_]  # empty spacer column
+    keep <- c("trt", table_state_cols)
+    if (extra_cols) {
+      present <- intersect(names(extra_map), names(wide))
+      setnames(wide, present, unname(extra_map[present]))
+      keep <- c(keep, unname(extra_map[present]))
+    }
+    rbind(data.table(trt = adj), wide[, keep, with = FALSE], fill = TRUE)
+  }), fill = TRUE)
 }
