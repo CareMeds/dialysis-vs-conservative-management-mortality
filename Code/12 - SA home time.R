@@ -33,11 +33,10 @@ load("Data/long_cohort_hosp_krt.Rdata")
 # set parameters
 M <- 10
 M_bootstrap <- 2
-# n_bootstraps <- 10
 
 # TRUE = rerun the bootstrap and save the results to the Data folder;
 # FALSE = load the previously saved bootstrap results from the Data folder
-recompute_bootstrap <- TRUE
+recompute_bootstrap <- FALSE
 bootstrap_file <- paste0("Data/bootstrap_results_home_time_", n_bootstraps, ".Rdata")
 
 # assumptions for the in-center days (see in_center_days in competing_risk.R; applied per state episode)
