@@ -122,21 +122,16 @@ for (w_meth in w_meths) {
 }
 
 # Create Figures
+# patchwork aligns the panels of the plot and the risk table automatically
+figure_1 <- out_KM_event_death_2y_IPTW$KM_plot /
+  out_KM_event_death_2y_unweighted$KM_table +
+  patchwork::plot_layout(heights = c(4, 1.4))
+
 ggplot2::ggsave(
-  plot = ggpubr::ggarrange(
-    out_KM_event_death_2y_IPTW$KM_plot,
-    # ggplot2::ggtitle(outcome_label) +
-    # ggplot2::theme(axis.title.y = ggplot2::element_text(margin = ggplot2::margin(r = -10))),
-    out_KM_event_death_2y_unweighted$KM_table +
-      ggplot2::theme(plot.background = ggplot2::element_rect(fill = "white", color = NA)),
-    ncol = 1,
-    heights = c(3, 1),
-    align = "v"
-  ),
+  plot = figure_1,
   filename = paste0(results_path, "Main/Figure_1.pdf"),
   width = 6,
-  height = 6,
-  dpi = 600
+  height = 6.5
 )
 
 # Supplemental Table for all outcomes and horizons

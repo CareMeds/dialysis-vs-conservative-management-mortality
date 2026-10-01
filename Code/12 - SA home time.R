@@ -33,11 +33,12 @@ load("Data/long_cohort_hosp_krt.Rdata")
 # set parameters
 M <- 10
 M_bootstrap <- 2
+# n_bootstraps <- 10
 
 # TRUE = rerun the bootstrap and save the results to the Data folder;
 # FALSE = load the previously saved bootstrap results from the Data folder
-recompute_bootstrap <- FALSE
-bootstrap_file <- "Data/bootstrap_results_home_time.Rdata"
+recompute_bootstrap <- TRUE
+bootstrap_file <- paste0("Data/bootstrap_results_home_time_", n_bootstraps, ".Rdata")
 
 # assumptions for the in-center days (see in_center_days in competing_risk.R; applied per state episode)
 in_center_params <- list(
@@ -88,18 +89,19 @@ write.xlsx(
   file = paste0(results_path, "Supplemental/Table_M_n_per_transition.xlsx")
 )
 
-# states in reporting order (not alphabetical); sets the column order of tables
-# (state_cols_in_center) and figures. States absent from the data are dropped
+# states in reporting order (not alphabetical). States absent from the data are dropped
 state_order <- c("At home", "Hospitalization", "HD", "PD", "Death")
 state_cols <- state_order[state_order %in% unique(bl$baseline_long$state)]
 
-# Columns added per patient: in-center days, total days at home (days alive - in-center
-# days), and days / in-center days from the start of dialysis (first HD or PD row)
-# onward; 0 for patients who never start. "Started dialysis" (0/1) and the total home /
-# in-center days counted only for starters feed the "among those who started" columns
-in_center_cols <- c("In-center", "Time at home", "Days after dialysis", "In-center after dialysis",
-                    "Started dialysis", "Home if started", "In-center if started",
-                    "Hospital if started")
+# Columns added per patient (see add_in_center_per_patient() in competing_risk.R): in-center
+# days, total days at home (days alive - in-center days), their components (home without /
+# on dialysis, in-center hospitalized / on dialysis), and days / in-center days / hospital
+# days from the start of dialysis (first HD or PD row) onward; 0 for patients who never start
+# (used for the before / after split in the figure)
+in_center_cols <- c("In-center", "Time at home",
+                    "Home without dialysis", "Home on dialysis",
+                    "In-center hospitalized", "In-center dialysis",
+                    "Days after dialysis", "In-center after dialysis", "Hospital after dialysis")
 
 # columns summarised in the estimate tables: the states plus in-center days
 estimate_cols <- c(state_cols, in_center_cols)
@@ -131,7 +133,6 @@ main <- fit_and_simulate(
 days_per_patient         <- main$days_per_patient
 days_per_patient_imputed <- main$days_per_patient_imputed
 iptw_dt                  <- main$iptw_dt
-imputations              <- main$imputations
 
 ################################################################################
 ### Bootstrap CI for the confounding+censoring-corrected estimate
@@ -191,16 +192,9 @@ bootstrap_results <- bootstrap_results[!failed]
 # (non-bootstrapped) point estimate for each of the 4 adjustment levels
 bootstrap_dt <- rbindlist(lapply(bootstrap_results, `[[`, "final"), idcol = "b")
 
-# total days at home (days alive - in-center days) and its % of days alive, taken
-# within each replicate. compute_all_estimates() now returns them; this only derives
-# them from the stored replicates of an older saved bootstrap file, so it does not
-# need to be rerun
-if (!"At home %" %in% bootstrap_dt$state) {
-  bootstrap_dt <- bootstrap_dt[state != "Time at home"]
-  bootstrap_dt <- add_days_at_home(bootstrap_dt,
-                                   alive_cols = setdiff(estimate_cols, c("Death", in_center_cols)),
-                                   by_cols = c("b", "trt", "adjustment"))
-}
+# a bootstrap file saved before the home / in-center split columns existed lacks them
+stopifnot("saved bootstrap lacks the home / in-center split: set recompute_bootstrap <- TRUE" =
+            "Home on dialysis" %in% bootstrap_dt$state)
 
 estimate_ci_dt <- bootstrap_dt[, .(lower = quantile(value, 0.025, na.rm = TRUE),
                                    upper = quantile(value, 0.975, na.rm = TRUE)), by = .(trt, state, adjustment)]
@@ -208,59 +202,66 @@ estimate_ci_dt <- bootstrap_dt[, .(lower = quantile(value, 0.025, na.rm = TRUE),
 point_long <- compute_all_estimates(days_per_patient_imputed,
                                     days_per_patient,
                                     iptw_dt,
-                                    estimate_cols,
-                                    in_center_cols)
+                                    estimate_cols)
 setnames(point_long, "value", "estimate")
 estimate_ci_dt <- merge(point_long, estimate_ci_dt, by = c("trt", "state", "adjustment"))
 setorder(estimate_ci_dt, trt, state)
 
+# Share of the in-center time in the dialysis arm that is due to dialysis (HD sessions / PD
+# visits) versus hospitalization, for the text of the manuscript. Ratio of the (weighted) mean
+# months, per adjustment level; the 95% CI is the percentile CI over the bootstrap replicates,
+# with the share taken within each replicate. The two shares add up to 100%
+ic_share <- function(dt, value_col, by_cols) {
+  d <- dt[trt == "1" & state %in% c("In-center", "In-center hospitalized", "In-center dialysis")]
+  d[, v := get(value_col)]
+  d[, {
+    ic <- v[state == "In-center"]
+    .(hospitalized = 100 * v[state == "In-center hospitalized"] / ic,
+      dialysis     = 100 * v[state == "In-center dialysis"] / ic)
+  }, by = by_cols]
+}
+ic_share_point <- ic_share(estimate_ci_dt, "estimate", "adjustment")
+ic_share_boot  <- ic_share(bootstrap_dt, "value", c("b", "adjustment"))
+stopifnot(all(abs(ic_share_point$hospitalized + ic_share_point$dialysis - 100) < 1e-8))
+
+ic_share_ci <- rbindlist(lapply(c("hospitalized", "dialysis"), function(part) {
+  boot <- ic_share_boot[, .(lower = quantile(get(part), 0.025, na.rm = TRUE),
+                            upper = quantile(get(part), 0.975, na.rm = TRUE)),
+                        by = adjustment]
+  merge(ic_share_point[, .(adjustment, estimate = get(part))], boot, by = "adjustment")[
+    , part := part]
+}))
+
+cat("\nShare of in-center time in the dialysis arm (% of in-center months)\n")
+for (adj in unique(ic_share_ci$adjustment)) {
+  cat("\n", adj, "\n", sep = "")
+  for (pt in c("dialysis", "hospitalized")) {
+    r <- ic_share_ci[adjustment == adj & part == pt]
+    cat(sprintf("  %-13s %.1f%% (95%% CI %.1f, %.1f)\n",
+                paste0(pt, ":"), r$estimate, r$lower, r$upper))
+  }
+}
+
 ################################################################################
 ### Estimate tables
 ################################################################################
-# states in the figure annotation (days; excludes Death in reporting)
-state_cols_in_center <- c(setdiff(state_cols, "Death"), "In-center", "Time at home")
-
 # The Excel tables only report three measures, in MONTHS: total time at home, total time
 # in-center (incl. hospital days) and total time in hospital. Days -> months with
 # days_per_month days per month (as in the figure and the RMST). "Time at home" = days
 # alive - in-center days (also counts days at home on dialysis).
 days_per_month   <- 30.44  # 365.25 / 12 days per month
 table_state_cols <- c("Time at home", "In-center", "Hospitalization")
-table_labels     <- c(
-  "Time at home"    = "Total months at home",
-  "In-center"       = "Total months in-center",
-  "Hospitalization" = "Total months in hospital"
-)
-
-# renames whichever of the labelled columns are present (all at once, by position)
-rename_state_cols <- function(dt, labels) {
-  dt  <- copy(dt)
-  idx <- match(names(labels), names(dt))
-  ok  <- !is.na(idx)
-  setnames(dt, idx[ok], unname(labels[ok]))
-  dt
-}
 
 # CI table: Dialysis / Conservative management / Difference per adjustment block
 # (Difference is taken within each replicate in compute_all_estimates()); estimates and
-# CIs converted from days to months, 1 decimal. extra_cols = FALSE: no percentage columns
-# Patients who started dialysis (amongst those who chose dialysis) get their own row with
-# the same measures as the arms.
-# Row order per adjustment block: choose conservative management, choose dialysis, the
-# difference choose dialysis vs. choose conservative management, then start dialysis
-table_trt_labels <- c(
-  `0`   = "Choose conservative management",
-  `1`   = "Choose dialysis",
-  diff  = "Choose dialysis vs. choose conservative management",
-  start = "Start dialysis (amongst those who chose dialysis)"
-)
-
+# CIs converted from days to months, 1 decimal
 estimate_ci_months_dt <- copy(estimate_ci_dt)
-estimate_ci_months_dt[state %in% table_state_cols,
+split_state_cols <- c("Home without dialysis", "Home on dialysis",
+                      "In-center hospitalized", "In-center dialysis")
+estimate_ci_months_dt[state %in% c(table_state_cols, split_state_cols),
                       `:=`(estimate = estimate / days_per_month,
                            lower    = lower    / days_per_month,
                            upper    = upper    / days_per_month)]
-diff_label <- "Difference"
 
 # check of the table: for every measure and adjustment the point estimates (months) per row
 # group, and the difference must equal choose dialysis - choose conservative management.
@@ -269,37 +270,36 @@ table_check <- dcast(estimate_ci_months_dt[state %in% table_state_cols],
                      adjustment + state ~ trt, value.var = "estimate")
 print(table_check[, .(adjustment, state,
                       choose_CM = round(`0`, 2), choose_dialysis = round(`1`, 2),
-                      difference = round(diff, 2), start_dialysis = round(start, 2))])
+                      difference = round(diff, 2),
+                      before_dialysis = round(before, 2), after_dialysis = round(after, 2))])
 stopifnot(all(abs(table_check$diff - (table_check$`1` - table_check$`0`)) < 1e-8))
+# time after the start is part of the total for choosing dialysis
+stopifnot(all(table_check$after <= table_check$`1` + 1e-8))
+# before + after the start of dialysis must add up to the total for choosing dialysis
+stopifnot(all(abs(table_check$before + table_check$after - table_check$`1`) < 1e-8))
 
-Bootstrap_CI_dt <- build_ci_table_dt(estimate_ci_months_dt, table_state_cols,
-                                     trt_labels = table_trt_labels,
-                                     digits = 1, extra_cols = FALSE)
-Bootstrap_CI_with_diff_dt <- rename_state_cols(Bootstrap_CI_dt, table_labels)
+# the components must add up to their totals, for every group and adjustment
+split_check <- dcast(estimate_ci_months_dt[trt %in% c("0", "1", "diff")],
+                     adjustment + trt ~ state, value.var = "estimate")
+stopifnot(all(abs(split_check[["Home without dialysis"]] + split_check[["Home on dialysis"]] -
+                    split_check[["Time at home"]]) < 1e-8))
+stopifnot(all(abs(split_check[["In-center hospitalized"]] + split_check[["In-center dialysis"]] -
+                    split_check[["In-center"]]) < 1e-8))
 
-# the bootstrap CI first (its point estimates are the pooled estimates), then one sheet per
-# imputation's own unpooled estimates (m1...m10) - 11 tabs total
-estimate_sheets <- c(
-  list(Bootstrap_CI = Bootstrap_CI_with_diff_dt),
-  setNames(
-    lapply(imputations, function(imp)
-      rename_state_cols(build_estimate_table_dt(
-        imp$days_per_patient_imputed,
-        days_per_patient,
-        iptw_dt,
-        estimate_cols,
-        table_state_cols,
-        days_per_month = days_per_month
-      ), table_labels)),
-    paste0("m", seq_along(imputations))
-  )
-)
+# number of patients per arm for the column headers
+n_dt <- days_per_patient[, .(N = uniqueN(LOPNR)), by = .(trt = as.character(trt))]
 
+Bootstrap_CI_with_diff_dt <- build_home_time_table_dt(estimate_ci_months_dt, n_dt,
+                                                      horizon_months = 24, digits = 1)
+
+# one sheet: the bootstrap CI table (its point estimates are the pooled estimates)
 write.xlsx(
-  estimate_sheets,
+  list(Bootstrap_CI = Bootstrap_CI_with_diff_dt),
   file = paste0(
     results_path,
-    "Supplemental/Table_S_home_time_estimates.xlsx"
+    "Supplemental/Table_S_home_time_estimates_", 
+    n_bootstraps,
+    ".xlsx"
   ),
   rowNames = FALSE
 )
@@ -333,10 +333,6 @@ p_time_bars <- create_time_bar_figure(
   total_months     = 24
 )
 
-p_time_bars
 ggplot2::ggsave(plot = p_time_bars,
                 filename = paste0(results_path, "Main/Figure_2.pdf"),
-                width = 10, height = 5, dpi = 300)
-ggplot2::ggsave(plot = p_time_bars,
-                filename = paste0(results_path, "Main/Figure_2.png"),
                 width = 10, height = 5, dpi = 300)

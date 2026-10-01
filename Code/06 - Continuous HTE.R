@@ -33,18 +33,18 @@ load("Data/cohort_with_models.Rdata")
 
 # The two time-consuming bootstrap parts can be recomputed or loaded from a saved file:
 #   recompute_validation: TRUE = rerun the internal validation (optimism-corrected calibration
-#                         and AUC of the risk model) and save the results to the Data folder;
-#                         FALSE = load the saved results
+#                         and AUC of the risk model), build the calibration figures and save the
+#                         results to the Data folder; FALSE = skip the internal validation and its
+#                         figures entirely (nothing is loaded)
 #   recompute_bootstrap:  TRUE = rerun the bootstrap of the HTE estimates and save the results
 #                         to the Data folder; FALSE = load the saved results
 # Everything after the bootstrap (tables and figures) always runs. Set a flag to TRUE the first
 # time and whenever the data, the models or the number of bootstraps change
-recompute_validation <- TRUE
+recompute_validation <- FALSE   # no saved validation results yet, so skip it
 recompute_bootstrap  <- TRUE
 validation_file <- "Data/HTE_validation_results.Rdata"
 bootstrap_file  <- "Data/HTE_bootstrap_results.Rdata"
-for (f in c(if (!recompute_validation) validation_file,
-            if (!recompute_bootstrap) bootstrap_file)) {
+for (f in c(if (!recompute_bootstrap) bootstrap_file)) {
   if (!file.exists(f)) stop("Saved results ", f, " not found - set the matching recompute flag to TRUE")
 }
 
@@ -187,37 +187,34 @@ if (recompute_validation) {
   }
   
   save(metrics, cal_inputs, file = validation_file)
-} else {
-  load(validation_file)   # restores metrics and cal_inputs
-  cat("Loaded saved validation results from", validation_file, "\n")
-}
-
-# calibration plots (original sample) from the stored model output
-cal_plots <- list(elig = calibration_plot(cal_inputs$elig),
-                  trt  = calibration_plot(cal_inputs$trt))
-
-# --- Compute optimism (rows 2:n = bootstrap iterations) -----------------
-# metrics$boot[1, ] is never filled (all zeros) — optimism correctly uses [-1, ]
-optimism   <- colMeans(metrics$orig[-1, ] - metrics$boot[-1, ])
-apparent   <- metrics$orig[1, ]
-orig_boots <- metrics$orig[-1, ]
-
-# --- Build and save plots -----------------------------------------------
-for (cohort in list(list(prefix = "elig", label = "elig"),
-                    list(prefix = "trt",  label = "trt"))) {
   
-  annotated <- annotate_cal_plot(
-    cal_plot_obj  = cal_plots[[cohort$prefix]],
-    apparent_vals = cohort_apparent(cohort$prefix),
-    boot_vals     = cohort_boots(cohort$prefix),
-    optimism_vals = cohort_optimism(cohort$prefix)
-  )
+  # calibration plots (original sample) from the stored model output
+  cal_plots <- list(elig = calibration_plot(cal_inputs$elig),
+                    trt  = calibration_plot(cal_inputs$trt))
   
-  save_cal_plot(
-    cal_plot_obj   = cal_plots[[cohort$prefix]],
-    annotated_plot = annotated,
-    filename       = paste0("Figure_M_HTE_calibration_", cohort$label, ".png")
-  )
+  # --- Compute optimism (rows 2:n = bootstrap iterations) -----------------
+  # metrics$boot[1, ] is never filled (all zeros) — optimism correctly uses [-1, ]
+  optimism   <- colMeans(metrics$orig[-1, ] - metrics$boot[-1, ])
+  apparent   <- metrics$orig[1, ]
+  orig_boots <- metrics$orig[-1, ]
+  
+  # --- Build and save plots -----------------------------------------------
+  for (cohort in list(list(prefix = "elig", label = "elig"),
+                      list(prefix = "trt",  label = "trt"))) {
+    
+    annotated <- annotate_cal_plot(
+      cal_plot_obj  = cal_plots[[cohort$prefix]],
+      apparent_vals = cohort_apparent(cohort$prefix),
+      boot_vals     = cohort_boots(cohort$prefix),
+      optimism_vals = cohort_optimism(cohort$prefix)
+    )
+    
+    save_cal_plot(
+      cal_plot_obj   = cal_plots[[cohort$prefix]],
+      annotated_plot = annotated,
+      filename       = paste0("Figure_M_HTE_calibration_", cohort$label, ".png")
+    )
+  }
 }
 
 ################################################################################
@@ -739,33 +736,37 @@ openxlsx::write.xlsx(
   file = paste0(results_path, "Supplemental/Table_S_HTE_pred_risk.xlsx")
 )
 
-# save variables
+# save variables (metrics only exists if the internal validation was run in this session)
+save_objects <- c(
+  "id_name",
+  "listvar",
+  "listvar_main",
+  "catvar",
+  "contvar",
+  "non_normal_vars",
+  "outcome_var",
+  "time2outcome_var",
+  "competing_events_var",
+  "treatment_label",
+  "control_label",
+  "baseline",
+  "model_PS",
+  "coef_PS_overall",
+  "elig_cohort",
+  "w_meths",
+  "trt_var",
+  "horizon",
+  "unit",
+  "n_bootstraps",
+  "manual_colors",
+  "estimates_df",
+  "metrics",
+  "table_risk",
+  "ITE_model_lp",
+  "ITE_model_age"
+)
+save_objects <- save_objects[sapply(save_objects, exists)]
 save(
-  id_name,
-  listvar,
-  listvar_main,
-  catvar,
-  contvar,
-  non_normal_vars,
-  outcome_var,
-  time2outcome_var,
-  competing_events_var,
-  treatment_label,
-  control_label,
-  baseline,
-  model_PS,
-  coef_PS_overall,
-  elig_cohort,
-  w_meths,
-  trt_var,
-  horizon,
-  unit,
-  n_bootstraps,
-  manual_colors,
-  estimates_df,
-  metrics,
-  table_risk,
-  ITE_model_lp,
-  ITE_model_age,
+  list = save_objects,
   file = file.path("Data/cohort_with_prob.Rdata")
 )
