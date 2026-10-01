@@ -445,8 +445,8 @@ compute_all_estimates <- function(days_per_patient_imputed,
   rbind(long_dt, after_measures_dt, before_measures_dt, use.names = TRUE)
 }
 
-# Table of mean months over the horizon: one block per adjustment level, columns Conservative
-# management / Dialysis / Dialysis vs conservative management, rows At home and In-center,
+# Table of mean months over the horizon: one block per adjustment level, columns Dialysis /
+# Conservative management / Dialysis vs conservative management, rows At home and In-center,
 # each followed by its split (without dialysis / on dialysis, or hospitalized / on dialysis).
 # The split rows are only filled for the dialysis column: only ~3% of the conservative arm ever
 # starts dialysis, so a split for that arm (and so for the difference) would rest on very few
@@ -486,8 +486,8 @@ build_home_time_table_dt <- function(estimate_ci_months_dt,
     formatC(n_dt[trt == code, N], format = "d", big.mark = ",")
   col_names <- c(
     first = paste0("Mean months over ", horizon_months, " months"),
-    `0`   = paste0("Conservative management (N=", n_fmt("0"), ")"),
     `1`   = paste0("Dialysis (N=", n_fmt("1"), ")"),
+    `0`   = paste0("Conservative management (N=", n_fmt("0"), ")"),
     diff  = "Dialysis vs conservative management"
   )
   
@@ -512,8 +512,8 @@ build_home_time_table_dt <- function(estimate_ci_months_dt,
       }, character(1))
       data.table(
         first = rows$label[i],
-        `0` = cells[["0"]],
         `1` = cells[["1"]],
+        `0` = cells[["0"]],
         diff = cells[["diff"]]
       )
     }))
@@ -521,8 +521,8 @@ build_home_time_table_dt <- function(estimate_ci_months_dt,
     rbind(
       data.table(
         first = adj,
-        `0` = NA_character_,
         `1` = NA_character_,
+        `0` = NA_character_,
         diff = NA_character_
       ),
       body
