@@ -546,6 +546,26 @@ build_results_table <- function(data,
   return(results_df)
 }
 
+# LEGACY (only used to derive the estimates from a bootstrap file saved before "Days
+# at home" was a per-patient column; compute_all_estimates() now returns both itself).
+# Adds two extra "states": total days at home ("Time at home") = days alive (all
+# states except Death) minus in-center days, and its share of the days alive
+# ("At home %", 100 * days at home / days alive, a ratio of means like "In-center %";
+# for "diff" it is the difference in days at home / difference in days alive).
+# Time at home includes days at home on dialysis (HD/PD outside the in-center
+# sessions/visits), unlike the "At home" state. Done within each group so it is exact
+# for every arm, for the "diff" row, and within each bootstrap replicate
+# (by_cols = c("b", "trt", "adjustment") for the stacked replicates).
+add_days_at_home <- function(long_dt, alive_cols, by_cols = c("trt", "adjustment")) {
+  home_dt <- long_dt[, {
+    alive <- sum(value[state %in% alive_cols])
+    home  <- alive - value[state == "In-center"]
+    .(state = c("Time at home", "At home %"),
+      value = c(home, 100 * home / alive))
+  }, by = by_cols]
+  rbind(long_dt, home_dt, use.names = TRUE)
+}
+
 # Computes all four adjustment-level estimates (unadjusted / confounding
 # only / censoring only / both) as one long table: trt, state,
 # adjustment, value. Shared by build_estimate_table_dt() (the real,
@@ -594,7 +614,13 @@ compute_all_estimates <- function(days_per_patient_imputed,
   # and for "diff" the difference in in-center days / difference in days alive.
   # Added as an extra "state" so it gets its CI like the other estimates
   alive_cols <- setdiff(state_cols, c("Death", in_center_cols))
-  pct_dt <- long_dt[, .(state = "In-center %", value = 100 * value[state == "In-center"] / sum(value[state %in% alive_cols])), by = .(trt, adjustment)]
+  # Same for total days at home ("At home %"; "Time at home" is a per-patient column,
+  # days alive - in-center days, so it is already in long_dt)
+  pct_dt <- long_dt[, {
+    alive <- sum(value[state %in% alive_cols])
+    .(state = c("In-center %", "At home %"),
+      value = 100 * c(value[state == "In-center"], value[state == "Time at home"]) / alive)
+  }, by = .(trt, adjustment)]
   
   # In-center days as % of days after starting dialysis: dialysis arm only (not
   # defined for conservative management, and so not for the difference)
@@ -602,38 +628,54 @@ compute_all_estimates <- function(days_per_patient_imputed,
                                     state = "In-center % after dialysis",
                                     value = 100 * value[state == "In-center after dialysis"] /
                                       value[state == "Days after dialysis"]), by = adjustment]
-  rbind(long_dt, pct_dt, after_dt, use.names = TRUE)
+  
+  # Patients who started dialysis (amongst the dialysis arm): extra "trt" group "start" with
+  # the same measures as the arms (time at home, in-center, hospitalization; days) plus the
+  # % who started. Ratio of the (weighted) means: mean(x * started) / mean(started), the mean
+  # among starters. With multiple imputation "started" is the share of imputations in which
+  # the patient started, so patients count fractionally
+  needed <- c("Started dialysis", "Home if started", "In-center if started", "Hospital if started")
+  if (!all(needed %in% long_dt$state))
+    stop("compute_all_estimates(): missing ", paste(setdiff(needed, long_dt$state), collapse = ", "),
+         " - add it to in_center_cols (file 12) and add_in_center_per_patient() (competing_risk.R)")
+  started_dt <- long_dt[trt == "1", {
+    v  <- function(s) value[state == s]
+    st <- v("Started dialysis")
+    .(trt   = "start",
+      state = c("Time at home", "In-center", "Hospitalization", "Started dialysis %"),
+      value = c(v("Home if started") / st,
+                v("In-center if started") / st,
+                v("Hospital if started") / st,
+                100 * st))
+  }, by = adjustment]
+  rbind(long_dt, pct_dt, after_dt, started_dt, use.names = TRUE)
 }
 
 # Builds the 4-block (unadjusted / confounding only / censoring only /
 # both) estimate table from a given days_per_patient_imputed table - used
 # below for both the pooled (averaged-across-M) version and each
 # imputation's own unpooled version, one sheet per call.
-# With after_dialysis = TRUE two columns are added (dialysis arm only, empty for
-# conservative management): mean in-center days after starting dialysis, and that
-# as a % of the mean days after starting dialysis (ratio of means, as in
-# compute_all_estimates()). state_cols must contain in_center_cols.
+# The table_state_cols (per-patient mean days) are converted to months (days_per_month
+# days per month) and rounded to digits decimals. state_cols must contain them.
 build_estimate_table_dt <- function(days_per_patient_imputed,
                                     days_per_patient,
                                     iptw_dt,
                                     state_cols,
                                     table_state_cols,
-                                    after_dialysis = TRUE) {
+                                    days_per_month = 30.44,
+                                    digits = 1) {
   est_unadjusted <- days_per_patient[, lapply(.SD, mean), by = trt, .SDcols = state_cols]
   est_confounding_only <- weighted_state_means(days_per_patient, iptw_dt, state_cols)
   est_censoring_only <- days_per_patient_imputed[, lapply(.SD, mean), by = trt, .SDcols = state_cols]
   est_confounding_and_censoring <- weighted_state_means(days_per_patient_imputed, iptw_dt, state_cols)
   
-  # rounded table for one adjustment level, plus the after-dialysis columns
+  # table for one adjustment level: months, rounded
   make_block <- function(est) {
-    out <- round_state_cols(est, table_state_cols)
-    if (after_dialysis) {
-      is_dialysis <- as.character(est$trt) == "1"
-      # empty spacer column (for formatting) before the after-dialysis columns
-      out[, ` ` := NA_character_]
-      out[, `In-center after dialysis (days)` := ifelse(is_dialysis, round(est[["In-center after dialysis"]], 0), NA_real_)]
-      out[, `In-center (% of days after starting dialysis)` := ifelse(is_dialysis, round(100 * est[["In-center after dialysis"]] / est[["Days after dialysis"]], 1), NA_real_)]
-    }
+    # days -> months, then round
+    est_months <- copy(est)
+    est_months[, (table_state_cols) := lapply(.SD, function(x) x / days_per_month),
+               .SDcols = table_state_cols]
+    out <- round_state_cols(est_months, table_state_cols, digits = digits)
     out
   }
   
@@ -656,11 +698,10 @@ build_estimate_table_dt <- function(days_per_patient_imputed,
 # cell "estimate (lower, upper)" via fmt_ci(). Rows are Dialysis, then
 # Conservative management, then Difference within every block; trt_labels
 # maps the trt codes ("1", "0", "diff") to those display labels.
-# With extra_cols = TRUE, three columns follow table_state_cols (when their states
-# are present in estimate_ci_dt): In-center as % of days alive; in-center days after
-# starting dialysis; and that as a % of days after starting dialysis. The last two
-# are only defined for the dialysis arm, so they are empty for conservative
-# management and Difference. Percentages show 1 decimal.
+# With extra_cols = TRUE, the columns In-center (% of days alive) and Total at home
+# (% of days alive) are placed right after In-center and Time at home respectively (when their
+# states are present in estimate_ci_dt). Percentages show
+# 1 decimal. The after-dialysis measures are in build_after_dialysis_ci_table_dt().
 build_ci_table_dt <- function(estimate_ci_dt,
                               table_state_cols,
                               trt_labels = c(`1` = "Dialysis", `0` = "Conservative management", diff = "Difference"),
@@ -670,20 +711,13 @@ build_ci_table_dt <- function(estimate_ci_dt,
   estimate_ci_dt[, formatted := fmt_ci(estimate, lower, upper, digits = digits)]
   
   # percentages: 1 decimal with % sign
-  pct_states <- c("In-center %", "In-center % after dialysis")
+  pct_states <- c("In-center %", "At home %", "In-center % after dialysis", "Started dialysis %")
   estimate_ci_dt[state %in% pct_states, formatted := sprintf("%.1f%% (%.1f, %.1f)", estimate, lower, upper)]
-  
-  # after-dialysis measures are dialysis arm only
-  after_states <- c("In-center after dialysis", "In-center % after dialysis")
-  estimate_ci_dt[state %in% after_states &
-                   trt != "1", formatted := NA_character_]
   
   # extra columns: state name -> column label
   extra_map <- c(
-    "In-center %"                = "In-center (% of days alive)",
-    " "                          = " ",  # empty spacer column (for formatting)
-    "In-center after dialysis"   = "In-center after dialysis (days)",
-    "In-center % after dialysis" = "In-center (% of days after starting dialysis)"
+    "In-center %" = "In-center (% of days alive)",
+    "At home %"   = "Total at home (% of days alive)"
   )
   
   adjustments <- c(
@@ -697,12 +731,19 @@ build_ci_table_dt <- function(estimate_ci_dt,
     wide <- dcast(estimate_ci_dt[adjustment == adj], trt ~ state, value.var = "formatted")
     wide <- wide[match(names(trt_labels), trt)]
     wide[, trt := trt_labels[trt]]
-    wide[, ` ` := NA_character_]  # empty spacer column
     keep <- c("trt", table_state_cols)
     if (extra_cols) {
       present <- intersect(names(extra_map), names(wide))
       setnames(wide, present, unname(extra_map[present]))
-      keep <- c(keep, unname(extra_map[present]))
+      # each percentage goes right after the day count it is a share of:
+      # In-center (% of days alive) after In-center, Total at home (% of days alive)
+      # after Time at home
+      insert_after <- function(keep, col, after) {
+        if (!col %in% names(wide)) return(keep)
+        append(keep, col, after = if (after %in% keep) match(after, keep) else length(keep))
+      }
+      keep <- insert_after(keep, extra_map[["In-center %"]], "In-center")
+      keep <- insert_after(keep, extra_map[["At home %"]],   "Time at home")
     }
     rbind(data.table(trt = adj), wide[, keep, with = FALSE], fill = TRUE)
   }), fill = TRUE)

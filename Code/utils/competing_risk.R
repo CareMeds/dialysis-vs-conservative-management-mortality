@@ -21,25 +21,34 @@ in_center_days <- function(state, days, in_center_params) {
 }
 
 # Sums the row-level in_center column per patient onto the days-per-state table.
+# Also adds "Time at home" = days alive (all rows except Death) - in-center days, so it
+# includes days at home on dialysis (HD/PD outside the in-center sessions/visits).
 add_in_center_per_patient <- function(days_dt, rows_dt) {
-  # first dialysis start per patient
-  start_dt <- rows_dt[state %in% c("HD", "PD"), .(dialysis_start = min(tstart)), by = LOPNR]
-  
-  # add each patient's first dialysis start to their rows
-  rows_dt <- merge(rows_dt, start_dt, by = "LOPNR", all.x = TRUE)
-  
-  # TRUE for rows that start on or after dialysis start
-  after <- !is.na(rows_dt$dialysis_start) &
-    rows_dt$tstart >= rows_dt$dialysis_start
-  
-  # store the flag on the rows
-  rows_dt[, after_dialysis := after]
+  # indicate which part is after dialysis
+  # (NA_real_ for patients who never start dialysis: min() of nothing is Inf, which
+  # data.table coerces to NA when tstart is an integer column, turning those
+  # patients' after-dialysis sums, and so the arm means, into NA)
+  rows_dt[, dialysis_start := {
+    s <- tstart[state %in% c("HD", "PD")]
+    if (length(s) > 0) as.numeric(min(s)) else NA_real_
+  }, by = LOPNR]
+  rows_dt[, after_dialysis := !is.na(dialysis_start) & as.numeric(tstart) >= dialysis_start]
   
   # sum in-center days, days after dialysis and in-center days after dialysis per patient
   ic <- rows_dt[, .(
     `In-center` = sum(in_center),
-    `Days after dialysis` = sum(days_in_row[after_dialysis]),
-    `In-center after dialysis` = sum(in_center[after_dialysis])
+    `Time at home` = sum(days_in_row[state != "Death"]) - sum(in_center),
+    `Days after dialysis` = sum(days_in_row[after_dialysis & state != "Death"]),
+    `In-center after dialysis` = sum(in_center[after_dialysis]),
+    # started dialysis (any HD/PD row) and total home / in-center days counted only for
+    # patients who started (0 otherwise): means of these divided by the mean of
+    # "Started dialysis" give the mean among those who started (see compute_all_estimates)
+    `Started dialysis` = as.numeric(any(state %in% c("HD", "PD"))),
+    `Home if started` = as.numeric(any(state %in% c("HD", "PD"))) *
+      (sum(days_in_row[state != "Death"]) - sum(in_center)),
+    `In-center if started` = as.numeric(any(state %in% c("HD", "PD"))) * sum(in_center),
+    `Hospital if started` = as.numeric(any(state %in% c("HD", "PD"))) *
+      sum(days_in_row[state == "Hospitalization"])
   ), by = .(LOPNR, trt)]
   
   # attach the per-patient sums to the days-per-state table
@@ -83,13 +92,9 @@ count_transitions_by_trt <- function(baseline_long,
                                      dialysis_only) {
   # count episodes and patients for every transition
   transition_n_dt <- rbindlist(lapply(transitions, function(tr) {
-    # origin state of this transition
-    origin <- tr[1]
-    
-    # destination state of this transition
-    destination <- tr[2]
-    
     # episodes and unique patients per arm
+    origin <- tr[1]
+    destination <- tr[2]
     dt <- baseline_long[state == origin &
                           next_state == destination, .(n_episodes = .N, n_patients = uniqueN(LOPNR)), by = trt]
     
@@ -294,14 +299,12 @@ build_baseline_long <- function(long_cohort_hosp,
   # drop the run id
   states_dt[, merge_state_id := NULL]
   
-  # ---- number dialysis episodes (HD and PD combined into one counter) ----
+  # Number dialysis episodes (HD and PD combined into one counter) ------------#
   states_dt[, is_dialysis := state %in% c("HD", "PD")]
-  # number dialysis episodes
   number_runs(states_dt, flag_col = "is_dialysis", episode_col = "dialysis_num")
   
-  # ---- number "at home" episodes ----
+  # Number "at home" episodes -------------------------------------------------#
   states_dt[, is_home := state == "At home"]
-  # number at-home episodes
   number_runs(states_dt, flag_col = "is_home", episode_col = "home_num")
   
   # Episode-count distribution ------------------------------------------------#
@@ -461,11 +464,13 @@ fit_cause_specific_cox <- function(dt,
                                    cap,
                                    dialysis_only,
                                    weight_col = "sw_IPTW") {
+  # prepare data for model fit ------------------------------------------------#
   # episodes starting in `origin`
   origin_dt <- dt[state == origin]
   
   # dialysis-only transitions: keep dialysis-arm episodes (trt constant, dropped from strata)
   is_dialysis_only <- paste(origin, "->", destination) %in% dialysis_only
+  
   # only for dialysis-only transitions
   if (is_dialysis_only) {
     # keep dialysis-arm episodes only
@@ -491,17 +496,17 @@ fit_cause_specific_cox <- function(dt,
     origin_dt[, trt_prev_nr_hosp_capped := as.character(prev_nr_hosp_capped)]
   }
   
+  # fit the Nelson-Aalen estimator --------------------------------------------#
   # build formula for cox fit
   formula <- Surv(time_in_state, event) ~ strata(trt_prev_nr_hosp_capped)
   
   # fit weighted Cox; capture coxph warnings into fit$warnings
   fit_warnings <- character()
   
-  # fit the Cox model, capturing warnings
   # unweighted: simulation uses observed within-stratum rates
   # IPTW is applied only when averaging
   model <- withCallingHandlers(
-    coxph(formula, data = origin_dt),
+    coxph(formula, data = origin_dt, ties = "breslow"),
     warning = function(w) {
       # store the warning message
       fit_warnings <<- c(fit_warnings, conditionMessage(w))
@@ -510,7 +515,7 @@ fit_cause_specific_cox <- function(dt,
     }
   )
   
-  # extract baseline hazard of cox model, keyed by the joint stratum column
+  # extract baseline hazard of cox model, keyed by the joint stratum column ---#
   bh <- get_basehaz(model)
   
   # clean the stratum labels
@@ -521,7 +526,8 @@ fit_cause_specific_cox <- function(dt,
   
   # data element named after origin, e.g. "At home" -> "at_home_dt"
   data_name <- paste0(gsub(" ", "_", tolower(origin)), "_dt")
-  # return model, hazards, flags and episode data
+  
+  # return model, hazards, flags and episode data -----------------------------#
   c(
     list(
       model = model,
@@ -565,9 +571,8 @@ simulate_cause_time <- function(fit,
                                 trt_chr,
                                 hosp_capped,
                                 is_first_event = FALSE,
-                                current_event_time = NULL,
-                                log_env = NULL,
-                                transition_name = NULL) {
+                                current_event_time = NULL) {
+  # initialize to simulate event ----------------------------------------------#
   # number of patients in this batch
   n <- length(trt_chr)
   
@@ -583,25 +588,13 @@ simulate_cause_time <- function(fit,
     hosp_chr
   }
   
-  # one U draw per patient
+  # one U draw per patient ----------------------------------------------------#
   U <- runif(n)
-  
-  # log the U draws
-  if (!is.null(log_env)) {
-    # store the U draws
-    log_env$U_draws <- c(log_env$U_draws, U)
-    
-    # store the transition of each draw
-    log_env$U_draws_transition <- c(log_env$U_draws_transition, rep(transition_name, n))
-  }
   
   # simulated times
   result <- numeric(n)
   
-  # a-priori probability of an Inf draw
-  p_inf_theoretical <- rep(NA_real_, n)
-  
-  # invert against each stratum's own baseline hazard curve in turn
+  # invert against each stratum's own baseline hazard curve in turn -----------#
   for (s in unique(stratum_key)) {
     # patients in this stratum
     idx <- which(stratum_key == s)
@@ -614,12 +607,10 @@ simulate_cause_time <- function(fit,
       # never transitions
       result[idx] <- Inf
       
-      # Inf is certain
-      p_inf_theoretical[idx] <- 1
-      
       # next stratum
       next
     }
+    
     # highest cumulative hazard in this stratum
     max_hazard <- bh_s$hazard[length(bh_s$hazard)]
     
@@ -633,12 +624,6 @@ simulate_cause_time <- function(fit,
       
       # cumulative hazard at entry
       bh_entry <- ifelse(entry_idx == 0, 0, bh_s$hazard[pmax(entry_idx, 1)])
-      
-      # a-priori probability that this draw is Inf
-      residual_hazard <- max_hazard - bh_entry
-      
-      # probability of Inf given entry
-      p_inf_theoretical[idx] <- exp(-residual_hazard)
       
       # conditional on surviving to entry: H(t) = -log(U) + H(t_entry)
       threshold <- -log(U[idx]) + bh_entry
@@ -654,62 +639,6 @@ simulate_cause_time <- function(fit,
     result[idx] <- ifelse(threshold > max_hazard, Inf, bh_s$time[pmin(cross_idx, length(bh_s$hazard))])
   }
   
-  # log diagnostics (all draws, and first-event draws separately)
-  if (!is.null(log_env)) {
-    # which draws are Inf
-    is_inf <- is.infinite(result)
-    
-    # number of Inf draws
-    n_inf <- sum(is_inf)
-    
-    # count all draws
-    log_env$n_candidates_all <- log_env$n_candidates_all + n
-    # log Inf draws
-    if (n_inf > 0) {
-      # count Inf draws
-      log_env$n_inf_all <- log_env$n_inf_all + n_inf
-      
-      # current per-transition count
-      prev_all <- log_env$n_inf_by_transition_all[[transition_name]]
-      
-      # update per-transition Inf count
-      log_env$n_inf_by_transition_all[[transition_name]] <- (if (is.null(prev_all))
-        0L
-        else
-          prev_all) + n_inf
-    }
-    
-    # log first-event draws separately
-    if (is_first_event) {
-      # count first-event draws
-      log_env$n_candidates_first_event <- log_env$n_candidates_first_event + n
-      
-      # store a-priori Inf probabilities
-      log_env$p_inf_theoretical <- c(log_env$p_inf_theoretical, p_inf_theoretical)
-      
-      # store whether the draw was Inf
-      log_env$p_inf_theoretical_inf <- c(log_env$p_inf_theoretical_inf, is_inf)
-      
-      # store the transition of each draw
-      log_env$p_inf_theoretical_transition <- c(log_env$p_inf_theoretical_transition,
-                                                rep(transition_name, n))
-      # log first-event Inf draws
-      if (n_inf > 0) {
-        # count first-event Inf draws
-        log_env$n_inf_first_event <- log_env$n_inf_first_event + n_inf
-        
-        # current per-transition count
-        prev_fe <- log_env$n_inf_by_transition_first_event[[transition_name]]
-        
-        # update per-transition first-event Inf count
-        log_env$n_inf_by_transition_first_event[[transition_name]] <- (if (is.null(prev_fe))
-          0L
-          else
-            prev_fe) + n_inf
-      }
-    }
-  }
-  
   # return event times
   result
 }
@@ -721,12 +650,11 @@ simulate_next_event <- function(cox_models,
                                 trt_chr,
                                 hosp_capped,
                                 is_first_event = FALSE,
-                                current_event_time = NULL,
-                                log_env = NULL) {
-  # select the cox models with possible transitions
+                                current_event_time = NULL) {
+  # select the cox models with possible transitions ---------------------------#
   candidates <- names(cox_models)[startsWith(names(cox_models), paste0(origin, " -> "))]
   
-  # time to event per candidate transition (one column each)
+  # time to event per candidate transition (one column each) ------------------#
   times_mat <- vapply(candidates, function(nm) {
     # draw times for this candidate transition
     simulate_cause_time(
@@ -734,57 +662,18 @@ simulate_next_event <- function(cox_models,
       trt_chr            = trt_chr,
       hosp_capped        = hosp_capped,
       is_first_event     = is_first_event,
-      current_event_time = current_event_time,
-      log_env            = log_env,
-      transition_name    = nm
+      current_event_time = current_event_time
     )
   }, numeric(length(trt_chr)))
   
   # restore matrix shape (vapply drops it for a single candidate)
   dim(times_mat) <- c(length(trt_chr), length(candidates))
   
-  # per-patient minimum across candidates
-  row_min <- times_mat[, 1]
-  # minimum over the remaining candidates
-  if (ncol(times_mat) > 1) {
-    # running minimum
-    for (j in 2:ncol(times_mat))
-      row_min <- pmin(row_min, times_mat[, j])
-  }
+  # per-patient minimum across candidates -------------------------------------#
+  row_min <- as.vector(do.call(pmin, asplit(times_mat, 2)))
   
-  # ties on a finite time are broken at random; default = first candidate
-  winner_idx <- max.col(-times_mat, ties.method = "first")
-  
-  # rows where several candidates tie
-  is_tied <- is.finite(row_min) &
-    (rowSums(times_mat == row_min) > 1)
-  
-  # number of tied rows
-  n_tied_rows <- sum(is_tied)
-  
-  # log steps and ties
-  if (!is.null(log_env)) {
-    # count steps
-    log_env$n_steps <- log_env$n_steps + length(trt_chr)
-    
-    # count ties
-    log_env$n_ties  <- log_env$n_ties + n_tied_rows
-  }
-  
-  # resolve ties at random
-  if (n_tied_rows > 0) {
-    # tied rows
-    tied_rows <- which(is_tied)
-    
-    # each tied row separately
-    for (r in tied_rows) {
-      # tied candidate columns
-      tied_cols <- which(times_mat[r, ] == row_min[r])
-      
-      # pick one at random
-      winner_idx[r] <- sample(tied_cols, 1)
-    }
-  }
+  hit        <- times_mat == row_min
+  winner_idx <- max.col(hit * 1, ties.method = "random")
   
   # return the event time and next state for soonest simulated event, per patient
   list(time        = row_min,
@@ -803,9 +692,8 @@ simulate_patient_trajectories <- function(id,
                                           horizon_days_2y,
                                           cox_models,
                                           cap,
-                                          log_env = NULL,
                                           max_transitions = 200) {
-  # number of patients
+  # initialize ----------------------------------------------------------------#
   n <- length(id)
   
   # current state per patient
@@ -832,7 +720,7 @@ simulate_patient_trajectories <- function(id,
   # number of output blocks
   n_out <- 0L
   
-  # loop until every patient has reached the end of follow-up or died
+  # loop until every patient has reached the end of follow-up or died ---------#
   for (i in seq_len(max_transitions)) {
     # patients still active
     act_idx <- which(active)
@@ -865,39 +753,11 @@ simulate_patient_trajectories <- function(id,
         current_event_time  = if (is_first_event)
           time_in_current_state[grp]
         else
-          NULL,
-        log_env             = log_env
+          NULL
       )
       
       # step$time is on the state's own clock (since entry_time)
       new_time <- entry_time[grp] + step$time
-      
-      # log draws that fall past the horizon (not recorded as transitions)
-      if (!is.null(log_env)) {
-        # finite draws past the horizon
-        swallowed <- is.finite(step$time) &
-          (new_time >= horizon_days_2y[grp])
-        # log them
-        if (any(swallowed)) {
-          # per transition
-          for (nm in unique(paste(st, "->", step$destination[swallowed]))) {
-            # number of swallowed draws
-            n_sw <- sum(paste(st, "->", step$destination[swallowed]) == nm)
-            
-            # count all swallowed draws
-            log_env$n_swallowed_by_horizon <- log_env$n_swallowed_by_horizon + n_sw
-            
-            # current count for this transition
-            prev <- log_env$n_swallowed_by_horizon_by_transition[[nm]]
-            
-            # update count for this transition
-            log_env$n_swallowed_by_horizon_by_transition[[nm]] <- (if (is.null(prev))
-              0L
-              else
-                prev) + n_sw
-          }
-        }
-      }
       
       # no transition before the horizon: stay in state until the horizon
       finishes <- is.infinite(step$time) |
@@ -1066,47 +926,8 @@ build_full_dt_from_simulated <- function(simulated_dt,
   full_dt
 }
 
-# Weighted mean cumulative days per patient by (time, trt, state) from daily state rollout.
-build_state_prob_dt <- function(full_dt, iptw_dt, time_grid) {
-  # one row per patient per day
-  setkey(full_dt, LOPNR, tstart)
-  
-  # patient by day grid
-  grid_dt <- CJ(LOPNR = unique(full_dt$LOPNR), time = time_grid)
-  
-  # state each patient was in each day
-  daily_state_dt <- full_dt[grid_dt, on = .(LOPNR, tstart = time), roll = TRUE]
-  
-  # rename tstart to time
-  setnames(daily_state_dt, "tstart", "time")
-  
-  # attach IPTW weights to count weighted, not raw, patients per state/day
-  daily_state_dt <- merge(daily_state_dt, iptw_dt, by = "LOPNR")
-  
-  # total IPTW weight per arm
-  total_weight_by_trt <- unique(daily_state_dt[, .(LOPNR, trt, sw_IPTW)])[, .(total_weight = sum(sw_IPTW)), by = trt]
-  
-  # weighted number of patients in each state, per day (snapshot, not cumulative)
-  state_prob_dt <- daily_state_dt[, .(weighted_n = sum(sw_IPTW)), by = .(time, trt, state)]
-  
-  # sort before the cumulative sum
-  setorder(state_prob_dt, trt, state, time)
-  
-  # running total of weighted patient-days per state
-  state_prob_dt[, cumulative_weighted_days := cumsum(weighted_n), by = .(trt, state)]
-  
-  # normalize by arm weight -> weighted mean days per patient
-  state_prob_dt <- merge(state_prob_dt, total_weight_by_trt, by = "trt")
-  
-  # mean cumulative days per patient
-  state_prob_dt[, mean_cumulative_days := cumulative_weighted_days / total_weight]
-  
-  # return time, arm, state and mean cumulative days
-  state_prob_dt[, .(time, trt, state, mean_cumulative_days)]
-}
-
-# One imputation: simulate censored patients, build full trajectories, days per
-# patient (incl. in-center) and the state curves.
+# One imputation: simulate censored patients, build full trajectories and days per
+# patient (incl. in-center).
 run_one_imputation <- function(m,
                                last_obs_dt,
                                cox_models,
@@ -1114,37 +935,7 @@ run_one_imputation <- function(m,
                                observed_part,
                                non_censored_part,
                                iptw_dt,
-                               time_grid,
                                in_center_params) {
-  # per-replicate diagnostics - inspect the returned $log$... afterward
-  log_env_m <- new.env()
-  # number of draws
-  log_env_m$n_candidates_all <- 0L
-  # number of Inf draws
-  log_env_m$n_inf_all <- 0L
-  # Inf draws per transition
-  log_env_m$n_inf_by_transition_all <- list()
-  # number of first-event draws
-  log_env_m$n_candidates_first_event <- 0L
-  # number of first-event Inf draws
-  log_env_m$n_inf_first_event <- 0L
-  # first-event Inf draws per transition
-  log_env_m$n_inf_by_transition_first_event <- list()
-  # a-priori Inf probabilities
-  log_env_m$p_inf_theoretical <- numeric(0)
-  # whether each draw was Inf
-  log_env_m$p_inf_theoretical_inf <- logical(0)
-  # transition of each draw
-  log_env_m$p_inf_theoretical_transition <- character(0)
-  # number of ties
-  log_env_m$n_ties <- 0L
-  # number of steps
-  log_env_m$n_steps <- 0L
-  # draws swallowed by the horizon
-  log_env_m$n_swallowed_by_horizon <- 0L
-  # swallowed draws per transition
-  log_env_m$n_swallowed_by_horizon_by_transition <- list()
-  
   # simulate all censored patients' remaining trajectories (vectorized)
   simulated_dt <- simulate_patient_trajectories(
     id                     = last_obs_dt$LOPNR,
@@ -1155,8 +946,7 @@ run_one_imputation <- function(m,
     trt                    = last_obs_dt$trt,
     horizon_days_2y        = last_obs_dt$horizon_days_2y,
     cox_models             = cox_models,
-    cap                    = cap_hosp,
-    log_env                = log_env_m
+    cap                    = cap_hosp
   )
   
   # trt is already on last_obs_dt
@@ -1179,15 +969,8 @@ run_one_imputation <- function(m,
   # add in-center days per patient
   days_per_patient_imputed_m <- add_in_center_per_patient(days_per_patient_imputed_m, full_dt_m)
   
-  # state curves for this imputation
-  state_prob_dt_m <- build_state_prob_dt(full_dt_m, iptw_dt, time_grid)
-  
-  # return days, curves and log
-  list(
-    days_per_patient_imputed = days_per_patient_imputed_m,
-    state_prob_dt = state_prob_dt_m,
-    log = log_env_m
-  )
+  # return days
+  list(days_per_patient_imputed = days_per_patient_imputed_m)
 }
 
 ################################################################################
@@ -1208,7 +991,6 @@ fit_and_simulate <- function(baseline,
                              M,
                              transitions,
                              dialysis_only,
-                             time_grid,
                              state_cols,
                              in_center_cols,
                              in_center_params) {
@@ -1245,7 +1027,7 @@ fit_and_simulate <- function(baseline,
   # IPTW weights per patient
   iptw_dt <- data.table(LOPNR = out_weights$data[[id_name]], sw_IPTW = out_weights$data$w)
   
-  # drop an old weight column
+  # drop an old weight column if it already exists
   if ("sw_IPTW" %in% names(baseline_long)) {
     # remove it
     baseline_long[, sw_IPTW := NULL]
@@ -1264,18 +1046,15 @@ fit_and_simulate <- function(baseline,
     observed_part     = observed_part,
     non_censored_part = non_censored_part,
     iptw_dt           = iptw_dt,
-    time_grid         = time_grid,
     in_center_params  = in_center_params
   )
   
+  # pool esitmates ------------------------------------------------------------#
   # pool by averaging the M replicates per patient
   days_per_patient_imputed <- rbindlist(lapply(imputations, `[[`, "days_per_patient_imputed"),
                                         idcol = "m")[, lapply(.SD, mean), by = .(LOPNR, trt), .SDcols = c(state_cols, in_center_cols)]
   
-  # pool Figure 3's mean cumulative days the same way
-  state_prob_dt <- rbindlist(lapply(imputations, `[[`, "state_prob_dt"), idcol = "m")[, .(mean_cumulative_days = mean(mean_cumulative_days)), by = .(time, trt, state)]
-  
-  # raw (unweighted) days per patient per state for the unadjusted rows
+  # raw (unweighted) days per patient per state for the unadjusted rows -------#
   baseline_long[, days_in_row := as.numeric(tstop - tstart)]
   
   # in-center days in each row
@@ -1297,7 +1076,6 @@ fit_and_simulate <- function(baseline,
   list(
     days_per_patient         = days_per_patient,
     days_per_patient_imputed = days_per_patient_imputed,
-    state_prob_dt            = state_prob_dt,
     cox_models               = cox_models,
     iptw_dt                  = iptw_dt,
     imputations              = imputations
@@ -1391,7 +1169,6 @@ run_one_bootstrap <- function(b,
                               M_bootstrap,
                               transitions,
                               dialysis_only,
-                              time_grid,
                               state_cols,
                               in_center_cols,
                               in_center_params) {
@@ -1419,7 +1196,6 @@ run_one_bootstrap <- function(b,
       M                     = M_bootstrap,
       transitions           = transitions,
       dialysis_only         = dialysis_only,
-      time_grid             = time_grid,
       state_cols            = state_cols,
       in_center_cols        = in_center_cols,
       in_center_params      = in_center_params
@@ -1439,13 +1215,12 @@ run_one_bootstrap <- function(b,
   # return estimates and curves
   list(
     final         = compute_all_estimates(
-      result$days_per_patient_imputed,
-      result$days_per_patient,
-      result$iptw_dt,
-      c(state_cols, in_center_cols),
-      in_center_cols
+      days_per_patient_imputed = result$days_per_patient_imputed,
+      days_per_patient = result$days_per_patient,
+      iptw_dt = result$iptw_dt,
+      state_cols = c(state_cols, in_center_cols),
+      in_center_cols = in_center_cols
     ),
-    state_prob_dt = result$state_prob_dt,
     cox_fit_summary = summarise_cox_fits(result$cox_models)
   )
 }
@@ -1458,16 +1233,19 @@ run_one_bootstrap <- function(b,
 weighted_state_means <- function(dt, weight_dt, state_cols) {
   # add weights
   dt <- merge(dt, weight_dt, by = "LOPNR")
+  
   # weighted means per arm
   dt[, lapply(.SD, weighted.mean, w = sw_IPTW), by = trt, .SDcols = state_cols]
 }
 
-# Keeps trt and cols, rounded to whole numbers.
-round_state_cols <- function(dt, cols) {
+# Keeps trt and cols, rounded to digits decimals (default whole numbers).
+round_state_cols <- function(dt, cols, digits = 0) {
   # keep trt and the requested columns
   dt <- copy(dt)[, c("trt", cols), with = FALSE]
-  # round to whole numbers
-  dt[, (cols) := lapply(.SD, round, digits = 0), .SDcols = cols]
+  
+  # round
+  dt[, (cols) := lapply(.SD, round, digits = digits), .SDcols = cols]
+  
   # return the table
   dt
 }
@@ -1508,16 +1286,10 @@ state_probabilities <- function(dt, horizon) {
   # transition matrix
   tmat <- mstate::trans.illdeath(c("Decision", "KRT", "Death"))
   
-  # set status and time at horizon
+  # set status and time at horizon for KRT and death
   dt[, KRT_event := fifelse(time2event_KRT_inf <= horizon, event_KRT_inf, 0)]
-  
-  # KRT time at horizon
   dt[, KRT_time := fifelse(time2event_KRT_inf <= horizon, time2event_KRT_inf, horizon)]
-  
-  # death status at horizon
   dt[, death_event := fifelse(time2event_death_inf <= horizon, event_death_inf, 0)]
-  
-  # death time at horizon
   dt[, death_time := fifelse(time2event_death_inf <= horizon,
                              time2event_death_inf,
                              horizon)]
@@ -1577,13 +1349,13 @@ state_probabilities <- function(dt, horizon) {
   # P11 = event-free; P12 = decision -> KRT; P13 = decision -> death
   
   # Average time spent in the decison state in the next two years
-  RMST_11 <- sum(state_prob$P11 * diff(c(alltimes, horizon))) / 30.5
+  RMST_11 <- sum(state_prob$P11 * diff(c(alltimes, horizon))) / 30.44
   
   # Average time spent in dialysis in the next two years
-  RMST_12 <- sum(state_prob$P12 * diff(c(alltimes, horizon))) / 30.5
+  RMST_12 <- sum(state_prob$P12 * diff(c(alltimes, horizon))) / 30.44
   
   # Average time spent alive in the next two years
-  RMST_13 <- sum((1 - state_prob$P13) * diff(c(alltimes, horizon))) / 30.5
+  RMST_13 <- sum((1 - state_prob$P13) * diff(c(alltimes, horizon))) / 30.44
   
   # return times, probabilities and RMST
   return(list(
