@@ -174,7 +174,13 @@ create_KM_plot <- function(data,
                            horizon,
                            unit = "months",
                            manual_colors,
-                           trt_labels = c("trt=0", "trt=1")) {
+                           trt_labels = c("trt=0", "trt=1"),
+                           show_censoring = TRUE,  # show censoring ticks?
+                           censor_height = 0.03,   # tick height (in survival probability units)
+                           censor_linewidth = 0.4, # tick line width in mm (increase if too faint)
+                           censor_alpha = 0.9,     # tick transparency (1 = opaque)
+                           label_width = 13,       # max. characters per line in risk-table labels
+                           font_family = "sans") {
   # extract data from out_est
   plot_data <- data.table(
     time = out_est$est_full$time,
@@ -240,6 +246,21 @@ create_KM_plot <- function(data,
   )
   censor_data <- censor_dt[n.censor>0]
   
+  # ---- shared style: same font, size and color for plot and table ----
+  base_size <- 14
+  txt_size  <- base_size * 0.8      # = size of the axis labels (theme_minimal: rel(0.8))
+  txt_col   <- "black"              # one text color for axes, legend, title and table
+  x_breaks  <- seq(0, horizon, by = 365 / 2)  # every 6 months
+  x_expand  <- ggplot2::expansion(mult = 0.03)
+  
+  # legend inside the plot (lower left is empty); use 'inside' if ggplot2 >= 3.5
+  legend_theme <- if (utils::packageVersion("ggplot2") >= "3.5.0") {
+    ggplot2::theme(legend.position = "inside",
+                   legend.position.inside = c(0.02, 0.03))
+  } else {
+    ggplot2::theme(legend.position = c(0.02, 0.03))
+  }
+  
   # create plot
   KM_plot <- ggplot2::ggplot(
     plot_data,
@@ -256,28 +277,51 @@ create_KM_plot <- function(data,
       ggplot2::aes(ymin = lower, ymax = upper),
       alpha = 0.2, # Transparency for the shading
       color = NA   # Remove the outline from the ribbon itself
-    ) +
-    ggplot2::geom_point(data = censor_data,  # add censoring
-                        ggplot2::aes(x = time, y = surv),
-                        shape = 3, 
-                        size = 2,
-                        stroke = 0.8,
-                        show.legend = FALSE) +
+    )
+  
+  # censoring ticks: thin and light (turn off with show_censoring = FALSE)
+  if (show_censoring) {
+    KM_plot <- KM_plot +
+      # vertical segments instead of point symbols: the width is set directly
+      # by linewidth, so it does not depend on the symbol/font rendering
+      ggplot2::geom_segment(data = censor_data,
+                            ggplot2::aes(x = time, xend = time,
+                                         # clamp to 0-1 so no tick falls outside the y-scale limits
+                                         y = pmax(surv - censor_height / 2, 0),
+                                         yend = pmin(surv + censor_height / 2, 1)),
+                            linewidth = censor_linewidth,
+                            alpha = censor_alpha,
+                            show.legend = FALSE)
+  }
+  
+  KM_plot <- KM_plot +
+    # y title at the top left (horizontal), same left edge as the risk table
     ggplot2::labs(
       x = paste0("Time (", unit, ")"),
-      y = "Survival probability (%)"
+      y = NULL,
+      title = "Survival probability (%)"
     ) +
-    ggplot2::theme_minimal() +
+    ggplot2::theme_minimal(base_size = base_size, base_family = font_family) +
     ggplot2::theme(
-      legend.position = "bottom",
+      plot.title = ggplot2::element_text(size = txt_size, color = txt_col,
+                                         hjust = 0,
+                                         margin = ggplot2::margin(b = 8)),
+      plot.title.position = "plot",
+      axis.text = ggplot2::element_text(color = txt_col),
+      axis.title = ggplot2::element_text(color = txt_col),
+      legend.text = ggplot2::element_text(color = txt_col, size = txt_size),
       legend.title = ggplot2::element_blank(),
+      legend.justification = c(0, 0),
+      legend.background = ggplot2::element_blank(),
+      legend.key.height = grid::unit(0.9, "lines"),
       panel.grid.major = ggplot2::element_blank(),
       panel.grid.minor = ggplot2::element_blank(),
-      axis.line = ggplot2::element_line(color = "black"),
-      axis.ticks = ggplot2::element_line(color = "black"),
-      text = ggplot2::element_text(size = 14),
+      axis.line = ggplot2::element_line(color = "black", linewidth = 0.25),
+      axis.ticks = ggplot2::element_line(color = "black", linewidth = 0.25),
+      axis.ticks.length = grid::unit(2, "pt"),
       plot.background = ggplot2::element_rect(fill = "white", color = NA)
     ) +
+    legend_theme +
     ggplot2::scale_y_continuous(
       limits = c(0, 1),
       breaks = seq(0, 1, by = 0.1),
@@ -285,52 +329,66 @@ create_KM_plot <- function(data,
       expand = c(0, 0)
     ) +
     ggplot2::scale_x_continuous(
-      breaks = seq(0, (horizon+1), by = 365 / 2), # break every 6 months
-      labels = function(x)
-        round(x / 30.44) # days -> months
+      breaks = x_breaks,
+      labels = function(x) round(x / 30.44), # days -> months
+      expand = x_expand
     ) +
+    ggplot2::coord_cartesian(xlim = c(0, horizon)) +
+    # reverse = TRUE: same order as the risk table (Dialysis on top, CM below)
     ggplot2::scale_color_manual(labels = trt_labels,
-                                values = manual_colors) +
+                                values = manual_colors,
+                                guide = ggplot2::guide_legend(reverse = TRUE)) +
     ggplot2::scale_fill_manual(guide = "none",
                                values = manual_colors) +
     ggplot2::scale_linetype_manual(guide = "none", 
                                    values = c("solid", "solid"))
   
   # find numbers at risk at each time point of interest
-  KM_table <- summary(KM_fit, times = seq(0, horizon, by = 365 / 2))
+  KM_table <- summary(KM_fit, times = x_breaks)
   risk_table <- data.table(
-    time = KM_table$time / 365,
+    time = KM_table$time,            # in days: same x-axis as the KM plot
     strata = factor(as.numeric(KM_table$strata)-1, 
                     levels = c(0, 1)),
     n.risk = round(KM_table$n.risk)  # after weighting might not be integer
   )
   
-  # create colors labels using HTML
-  colored_labels <- paste0("<span style='color:", manual_colors[1:2], "'>", trt_labels, "</span>")
+  # row labels: drop underscores, wrap long labels over two lines, color via HTML
+  wrap_label <- function(x) {
+    x <- gsub("_", " ", x)
+    paste(strwrap(x, width = label_width), collapse = "<br>")
+  }
+  colored_labels <- paste0("<span style='color:", manual_colors[1:2], "'>",
+                           vapply(trt_labels, wrap_label, character(1)),
+                           "</span>")
   
   # create table
   KM_table <- ggplot2::ggplot(risk_table, 
                               ggplot2::aes(x = time, 
                                            y = strata, 
                                            label = n.risk)) +
-    ggplot2::geom_text() +
-    ggplot2::scale_x_continuous(limits = c(0, horizon / 365),
-                                breaks = seq(0, horizon / 365, by = 0.5)) +
-    ggplot2::scale_y_discrete(labels = colored_labels) + 
-    ggplot2::theme_void() +
+    ggplot2::geom_text(size = txt_size / ggplot2::.pt,
+                       color = txt_col,
+                       family = font_family) +
+    ggplot2::scale_x_continuous(breaks = x_breaks, expand = x_expand) +
+    # extra space above/below so the rows are further apart
+    ggplot2::scale_y_discrete(labels = colored_labels,
+                              expand = ggplot2::expansion(add = 0.8)) + 
+    ggplot2::coord_cartesian(xlim = c(0, horizon), clip = "off") +
+    ggplot2::labs(title = "Number at risk") +
+    ggplot2::theme_void(base_size = base_size, base_family = font_family) +
     ggplot2::theme(
-      axis.text.y = ggtext::element_markdown(hjust = 1)
+      plot.title = ggplot2::element_text(size = txt_size, color = txt_col,
+                                         face = "bold", hjust = 0),
+      plot.title.position = "plot",
+      # left-aligned labels, with padding between label and numbers
+      axis.text.y = ggtext::element_markdown(size = txt_size, color = txt_col,
+                                             hjust = 0, halign = 0, lineheight = 1,
+                                             margin = ggplot2::margin(r = 10)),
+      plot.background = ggplot2::element_rect(fill = "white", color = NA)
     )
   
   return(list(KM_plot = KM_plot,
               KM_table = KM_table))
-}
-
-# combine histograms on propensity score distributions
-combine_PS_plots <- function(plot_list) {
-  lapply(seq_along(plot_list), function(i) {
-    plot_list[[i]]$hist + plot_list[[i]]$scaled_hist
-  })
 }
 
 create_forest_plot_all_measures <- function(dt,
@@ -877,128 +935,6 @@ plot_metric <- function(df,
   return(plot)
 }
 
-# Horizontal stacked bars, one per treatment arm, of the mean time (months) spent in
-# each component over the follow-up (e.g. total time at home, total time in-center,
-# death = the remaining time), so every bar adds up to total_months. Numbers (estimate
-# and 95% CI) are written inside the segments; segments narrower than small_threshold
-# months get their label outside the bar, with a short leader line. Dashed lines connect
-# the segment boundaries between neighbouring bars.
-# bar_dt: one row per arm x component with columns arm (label), arm_order (1 = top bar),
-# component, value, lower, upper (all in months). component_colors: named vector whose
-# names are the components, in the order they are stacked (left to right).
-# Optional column connector_group: components that share a group (e.g. two parts of the
-# same segment in one bar) are treated as one segment for the dashed connectors, so bars
-# that split a segment can still be connected to bars that do not. Defaults to component.
-# A component may be absent from some arms.
-make_time_bar_figure <- function(bar_dt,
-                                 component_colors,
-                                 total_months = 24,
-                                 small_threshold = 1.8,
-                                 text_size = 3.3,
-                                 bar_height = 0.4,
-                                 legend_title = "Mean time over 2 years",
-                                 x_title = "Months") {
-  dt <- data.table::copy(data.table::as.data.table(bar_dt))
-  dt[, component := factor(component, levels = names(component_colors))]
-  data.table::setorder(dt, arm_order, component)
-  
-  if (!"connector_group" %in% names(dt)) dt[, connector_group := as.character(component)]
-  
-  # segment limits within each bar
-  dt[, xmax := cumsum(value), by = arm_order]
-  dt[, xmin := xmax - value]
-  dt[, xmid := (xmin + xmax) / 2]
-  
-  # bar positions: arm_order 1 on top
-  n_arm <- data.table::uniqueN(dt$arm_order)
-  dt[, y := n_arm - arm_order + 1]
-  h <- bar_height / 2
-  
-  # label text; dark text on light fills, white on dark fills
-  dt[, label := sprintf("%.1f\n(%.1f, %.1f)", value, lower, upper)]
-  lum <- function(col) {
-    rgb <- grDevices::col2rgb(col) / 255
-    0.2126 * rgb[1, ] + 0.7152 * rgb[2, ] + 0.0722 * rgb[3, ]
-  }
-  dt[, text_col := ifelse(lum(component_colors[as.character(component)]) < 0.55, "white", "black")]
-  
-  # labels inside the segment, or outside with a leader line for narrow segments:
-  # above the top bar, below the others
-  dt[, outside := value < small_threshold]
-  dt[, direction := ifelse(arm_order == min(arm_order), 1, -1)]
-  inside_dt  <- dt[outside == FALSE]
-  outside_dt <- dt[outside == TRUE]
-  outside_dt[, `:=`(y_edge  = y + direction * h,
-                    y_label = y + direction * (h + 0.30))]
-  
-  # dashed connectors between the boundaries of neighbouring bars
-  # (per connector_group: the right edge of the group's last segment in each bar; the last
-  # group of a bar ends at total_months and gets no connector)
-  group_order <- unique(dt[order(as.integer(component)), connector_group])
-  boundaries <- dt[, .(boundary = max(xmax), y = y[1],
-                       last_comp = max(as.integer(component))), by = .(arm_order, connector_group)]
-  boundaries <- boundaries[connector_group != group_order[length(group_order)]]
-  connect_dt <- merge(boundaries[, .(arm_order, y, boundary, connector_group)],
-                      data.table::copy(boundaries[, .(arm_order, y, boundary, connector_group)])[, arm_order := arm_order - 1],
-                      by = c("arm_order", "connector_group"),
-                      suffixes = c("_top", "_bottom"))
-  
-  arms <- unique(dt[, .(y, arm)])
-  
-  p <- ggplot2::ggplot() +
-    ggplot2::geom_segment(
-      data = connect_dt,
-      ggplot2::aes(x = boundary_top, xend = boundary_bottom,
-                   y = y_top - h, yend = y_bottom + h),
-      linetype = "dashed", colour = "grey60", linewidth = 0.3
-    ) +
-    ggplot2::geom_rect(
-      data = dt,
-      ggplot2::aes(xmin = xmin, xmax = xmax, ymin = y - h, ymax = y + h, fill = component),
-      colour = "white", linewidth = 0.4
-    ) +
-    ggplot2::geom_text(
-      data = inside_dt,
-      ggplot2::aes(x = xmid, y = y, label = label, colour = text_col),
-      size = text_size, lineheight = 0.95
-    ) +
-    ggplot2::scale_colour_identity() +
-    ggplot2::scale_fill_manual(values = component_colors, name = legend_title) +
-    # coord_cartesian (not scale limits) for the x range: a bar ending at total_months
-    # plus a floating-point hair would be dropped as out of bounds, leaving it blank
-    ggplot2::scale_x_continuous(breaks = seq(0, total_months, by = 3)) +
-    ggplot2::scale_y_continuous(breaks = arms$y, labels = arms$arm) +
-    ggplot2::coord_cartesian(xlim = c(-0.1, total_months + 0.5),
-                             ylim = c(0.25, n_arm + 0.75),
-                             expand = FALSE) +
-    ggplot2::labs(x = x_title, y = NULL) +
-    ggplot2::guides(fill = ggplot2::guide_legend(nrow = 1, title.position = "top")) +
-    ggplot2::theme_classic() +
-    ggplot2::theme(
-      legend.position = "top",
-      legend.title = ggplot2::element_text(face = "bold", hjust = 0.5),
-      axis.text.y = ggplot2::element_text(face = "bold", colour = "black"),
-      axis.ticks.y = ggplot2::element_blank(),
-      axis.line.y = ggplot2::element_blank()
-    )
-  
-  if (nrow(outside_dt) > 0) {
-    p <- p +
-      ggplot2::geom_segment(
-        data = outside_dt,
-        ggplot2::aes(x = xmid, xend = xmid, y = y_edge, yend = y_label - direction * 0.13),
-        colour = "black", linewidth = 0.3
-      ) +
-      ggplot2::geom_text(
-        data = outside_dt,
-        ggplot2::aes(x = xmid, y = y_label, label = label),
-        size = text_size, lineheight = 0.95, colour = "black"
-      )
-  }
-  
-  p
-}
-
 # Curly brace (accolade) as a path along x0..x1 next to a bar edge at y0. side = +1 draws it
 # above the edge (tip pointing up), -1 below. rx (x units) and ry (y units) set the size of
 # the rounded corners; narrow segments get a smaller rx.
@@ -1012,47 +948,54 @@ brace_path <- function(x0, x1, y0, side, rx_max = 0.35, ry = 0.05, n = 12) {
   data.frame(x = c(lx, rev(2 * xm - lx)), y = c(ly, rev(ly)))
 }
 
-# Flexible version of make_time_bar_figure() with (1) numbers either inside the boxes or
-# on curly braces next to the bars, (2) free placement of the bars, so extra (thinner)
-# blocks can be added, and (3) per-bar choice of the side the labels go on.
+# Horizontal stacked bars of the mean time (months) in each component over the follow-up
+# (e.g. time at home, time in-center, death = the remaining time), so every bar adds up to
+# total_months. Free placement of the bars (so extra bars can be added), numbers inside the
+# boxes (bold estimate, CI below) or, for narrow segments, in one line outside the bar with a
+# short leader line, optional curly braces, optional text under segments, and per-bar choice
+# of the side the outside labels go on. Needs ggtext.
 # bar_dt: one row per bar x component, columns
-#   y (numeric vertical position of the bar, larger = higher), y_label (axis label),
-#   component, value, lower, upper (months), side (+1 labels above the bar, -1 below),
-#   optional bar_height (default bar_height), optional connector_group (see
-#   make_time_bar_figure; used by connectors = TRUE).
-# legend_note: optional italic text centred just below the legend (at the top of the panel),
-# e.g. to explain a lighter shade.
-# legend_breaks / legend_labels: optional components (and their labels) to show in the legend;
-# all components are still coloured. Use it to keep the legend small when several components
-# share a colour (e.g. before / after parts of one component).
+#   y (numeric vertical position of the bar, larger = higher), y_label (axis label, markdown),
+#   component, value, lower, upper (months), side (+1 outside labels above the bar, -1 below),
+#   optional bar_height, optional connector_group, optional connect (FALSE = this bar takes
+#   no part in the dashed connectors).
 # component_colors: named vector, names = components in stacking order (left to right).
-# label_style "boxes": numbers inside the segments (outside with a leader line when narrower
-#   than small_threshold months); "braces": every segment gets a brace with the numbers.
-# Neighbouring outside labels that would overlap are staggered over several levels.
-# connectors: dashed lines between the segment boundaries of vertically neighbouring bars.
-# extra_lines: optional data.frame (x, xend, y, yend) of additional dashed lines.
-make_time_bar_figure2 <- function(bar_dt,
-                                  component_colors,
-                                  total_months = 24,
-                                  label_style = c("boxes", "braces"),
-                                  connectors = TRUE,
-                                  extra_lines = NULL,
-                                  small_threshold = 1.8,
-                                  text_size = 3.3,
-                                  bar_height = 0.4,
-                                  min_label_dx = 3.0,
-                                  level_step = 0.36,
-                                  legend_title = "Mean time over 2 years",
-                                  legend_nrow = 1,
-                                  legend_breaks = NULL,
-                                  legend_labels = legend_breaks,
-                                  legend_note = NULL,
-                                  x_title = "Months") {
-  label_style <- match.arg(label_style)
+# legend_title: NULL (default) = no legend title. legend_size: size of the legend relative to
+#   the base font.
+# braces_extra: optional data.frame (x0, x1, y, side): one brace spanning x0..x1 along the bar
+#   edge at y (side = -1: below the edge, tip pointing down; +1: above).
+# segment_labels: optional data.frame (x, y, label): plain text, top-aligned at y, centred at x.
+# caption: optional small note below the figure.
+# label_gap: free space (y units) between a leader line and its label.
+# label_height: height (y units) reserved for a two-line label (one-line labels get 55%).
+make_time_bar_figure <- function(bar_dt,
+                                 component_colors,
+                                 total_months = 24,
+                                 braces_extra = NULL,
+                                 segment_labels = NULL,
+                                 small_threshold = 1.8,
+                                 text_size = 3.3,
+                                 base_size = 11,
+                                 bar_height = 0.4,
+                                 min_label_dx = 4,
+                                 level_step = NULL,
+                                 label_gap = 0.08,
+                                 label_height = 0.09 * text_size,
+                                 x_break_by = 6,
+                                 axis_colour = "grey30",
+                                 legend_title = NULL,
+                                 legend_size = 1.15,
+                                 legend_nrow = 1,
+                                 legend_breaks = NULL,
+                                 legend_labels = legend_breaks,
+                                 caption = NULL,
+                                 x_title = "Months") {
+  if (is.null(level_step)) level_step <- label_height + 0.03
   dt <- data.table::copy(data.table::as.data.table(bar_dt))
   dt[, component := factor(component, levels = names(component_colors))]
   if (!"bar_height" %in% names(dt)) dt[, bar_height := bar_height]
   if (!"connector_group" %in% names(dt)) dt[, connector_group := as.character(component)]
+  if (!"connect" %in% names(dt)) dt[, connect := TRUE]
   data.table::setorder(dt, -y, component)
   
   # segment limits within each bar
@@ -1060,7 +1003,6 @@ make_time_bar_figure2 <- function(bar_dt,
   dt[, xmin := xmax - value]
   dt[, xmid := (xmin + xmax) / 2]
   dt[, h := bar_height / 2]
-  dt[, label := sprintf("%.1f\n(%.1f, %.1f)", value, lower, upper)]
   
   # dark text on light fills, white on dark fills
   lum <- function(col) {
@@ -1069,8 +1011,14 @@ make_time_bar_figure2 <- function(bar_dt,
   }
   dt[, text_col := ifelse(lum(component_colors[as.character(component)]) < 0.55, "white", "black")]
   
-  # which labels sit outside the bar
-  dt[, outside := if (label_style == "braces") TRUE else value < small_threshold]
+  # narrow segments get their label outside the bar
+  dt[, outside := value < small_threshold]
+  
+  # labels: bold estimate + CI on the next line; narrow segments get one line outside the bar
+  dt[, label := ifelse(outside,
+                       sprintf("%.1f (%.1f, %.1f)", value, lower, upper),
+                       sprintf("<b>%.1f</b><br>(%.1f, %.1f)", value, lower, upper))]
+  dt[, lab_h := ifelse(outside, 0.55 * label_height, label_height)]
   
   # stagger overlapping outside labels (same bar, same side) over levels 0, 1, 2, ...
   dt[, level := 0L]
@@ -1087,34 +1035,32 @@ make_time_bar_figure2 <- function(bar_dt,
   }
   
   # geometry of the outside labels
-  ry <- 0.05
-  dt[, y_edge := y + side * (h + 0.04)]
-  if (label_style == "braces") {
-    dt[, y_tip := y_edge + side * 2 * ry]
-  } else {
-    dt[, y_tip := y + side * h]
-  }
-  dt[, lab_y := y_tip + side * ((if (label_style == "braces") 0.04 else 0.14) + level * level_step)]
+  dt[, y_tip := y + side * h]
+  dt[, lab_y := y_tip + side * (0.2 + level * level_step)]
+  # leader lines stop label_gap short of the label so they never touch the text
+  dt[, leader_end := lab_y - side * label_gap]
   
-  # braces
-  brace_dt <- NULL
-  if (label_style == "braces") {
-    brace_dt <- data.table::rbindlist(lapply(seq_len(nrow(dt)), function(i) {
-      b <- brace_path(dt$xmin[i], dt$xmax[i], dt$y_edge[i], dt$side[i], ry = ry)
+  # extra braces (e.g. one brace under a whole segment)
+  extra_brace_dt <- NULL
+  if (!is.null(braces_extra) && nrow(braces_extra) > 0) {
+    extra_brace_dt <- data.table::rbindlist(lapply(seq_len(nrow(braces_extra)), function(i) {
+      b <- brace_path(braces_extra$x0[i], braces_extra$x1[i], braces_extra$y[i],
+                      braces_extra$side[i], rx_max = 0.6, ry = 0.09)
       b$id <- i
       b
     }))
   }
   
-  # leader lines from the bar / brace tip up to the label (when not directly adjacent)
-  leader_dt <- dt[outside == TRUE & (label_style == "boxes" | level > 0)]
+  # leader lines from the bar / brace tip to the label
+  leader_dt <- dt[outside == TRUE]
   
-  # dashed connectors between boundaries of neighbouring bars
-  ys <- sort(unique(dt$y), decreasing = TRUE)
+  # dashed connectors between boundaries of neighbouring (connecting) bars
   connect_dt <- NULL
-  if (connectors && length(ys) > 1) {
+  cdt <- dt[connect == TRUE]
+  ys <- sort(unique(cdt$y), decreasing = TRUE)
+  if (length(ys) > 1) {
     grp_order <- unique(dt[order(as.integer(component)), connector_group])
-    bnd <- dt[, .(boundary = max(xmax), h = h[1]), by = .(y, connector_group)]
+    bnd <- cdt[, .(boundary = max(xmax), h = h[1]), by = .(y, connector_group)]
     bnd <- bnd[connector_group != grp_order[length(grp_order)]]
     bnd[, row := match(y, ys)]
     connect_dt <- merge(bnd, data.table::copy(bnd)[, row := row - 1],
@@ -1124,14 +1070,12 @@ make_time_bar_figure2 <- function(bar_dt,
   arms <- unique(dt[, .(y, y_label)])
   data.table::setorder(arms, y)
   
-  # vertical room for the labels
-  pad <- function(sd) {
-    m <- dt[side == sd & outside == TRUE]
-    if (nrow(m) == 0) return(0.35)
-    0.35 + 0.25 + (if (label_style == "braces") 0.1 else 0) + max(m$level) * level_step
-  }
-  ylim <- c(min(dt$y - dt$h) - pad(-1) + 0.15,
-            max(dt$y + dt$h) + pad(1) - 0.05 + (if (is.null(legend_note)) 0 else 0.4))
+  # panel limits: exactly as much room as the bars and their outside labels need
+  out <- dt[outside == TRUE]
+  lo <- min(c(dt$y - dt$h, out[side == -1, lab_y - lab_h]))
+  hi <- max(c(dt$y + dt$h, out[side == 1,  lab_y + lab_h]))
+  if (!is.null(segment_labels)) lo <- min(lo, segment_labels$y - 0.55 * label_height)
+  ylim <- c(lo - 0.08, hi + 0.06)
   
   p <- ggplot2::ggplot()
   if (!is.null(connect_dt) && nrow(connect_dt) > 0) {
@@ -1139,13 +1083,7 @@ make_time_bar_figure2 <- function(bar_dt,
       data = connect_dt,
       ggplot2::aes(x = boundary_top, xend = boundary_bottom,
                    y = y_top - h_top, yend = y_bottom + h_bottom),
-      linetype = "dashed", colour = "grey60", linewidth = 0.3)
-  }
-  if (!is.null(extra_lines)) {
-    p <- p + ggplot2::geom_segment(
-      data = extra_lines,
-      ggplot2::aes(x = x, xend = xend, y = y, yend = yend),
-      linetype = "dashed", colour = "grey60", linewidth = 0.3)
+      linetype = "dashed", colour = "grey70", linewidth = 0.3)
   }
   p <- p +
     ggplot2::geom_rect(
@@ -1153,39 +1091,40 @@ make_time_bar_figure2 <- function(bar_dt,
       ggplot2::aes(xmin = xmin, xmax = xmax, ymin = y - h, ymax = y + h, fill = component),
       colour = "white", linewidth = 0.4)
   
-  # numbers inside the segments (boxes style)
+  # numbers inside the segments
+  no_pad <- grid::unit(rep(0, 4), "pt")
   inside_dt <- dt[outside == FALSE]
   if (nrow(inside_dt) > 0) {
-    p <- p + ggplot2::geom_text(
+    p <- p + ggtext::geom_richtext(
       data = inside_dt,
       ggplot2::aes(x = xmid, y = y, label = label, colour = text_col),
-      size = text_size, lineheight = 0.95) +
+      size = text_size, lineheight = 0.95, fill = NA, label.colour = NA,
+      label.padding = no_pad, label.margin = no_pad) +
       ggplot2::scale_colour_identity()
   }
   
   # braces, leader lines and outside labels
-  if (!is.null(brace_dt)) {
-    p <- p + ggplot2::geom_path(data = brace_dt, ggplot2::aes(x = x, y = y, group = id),
-                                colour = "black", linewidth = 0.35)
+  if (!is.null(extra_brace_dt)) {
+    p <- p + ggplot2::geom_path(data = extra_brace_dt, ggplot2::aes(x = x, y = y, group = id),
+                                colour = "grey40", linewidth = 0.4)
   }
   if (nrow(leader_dt) > 0) {
     p <- p + ggplot2::geom_segment(
       data = leader_dt,
-      ggplot2::aes(x = xmid, xend = xmid, y = y_tip, yend = lab_y),
-      colour = "black", linewidth = 0.3)
+      ggplot2::aes(x = xmid, xend = xmid, y = y_tip, yend = leader_end),
+      colour = "grey30", linewidth = 0.3)
   }
-  outside_dt <- dt[outside == TRUE]
-  if (nrow(outside_dt) > 0) {
-    p <- p + ggplot2::geom_text(
-      data = outside_dt,
+  if (nrow(out) > 0) {
+    p <- p + ggtext::geom_richtext(
+      data = out,
       ggplot2::aes(x = xmid, y = lab_y, label = label, vjust = ifelse(side > 0, 0, 1)),
-      size = text_size, lineheight = 0.95, colour = "black")
+      size = text_size, lineheight = 0.95, colour = "black", fill = NA, label.colour = NA,
+      label.padding = no_pad, label.margin = no_pad)
   }
-  
-  if (!is.null(legend_note)) {
-    p <- p + ggplot2::annotate("text", x = total_months / 2, y = ylim[2] - 0.05,
-                               label = legend_note, fontface = "italic",
-                               hjust = 0.5, vjust = 1, size = text_size)
+  if (!is.null(segment_labels)) {
+    p <- p + ggplot2::geom_text(
+      data = segment_labels, ggplot2::aes(x = x, y = y, label = label),
+      vjust = 1, size = text_size, colour = "grey20")
   }
   
   p +
@@ -1194,38 +1133,68 @@ make_time_bar_figure2 <- function(bar_dt,
       limits = names(component_colors)[names(component_colors) %in% as.character(dt$component)],
       breaks = if (is.null(legend_breaks)) ggplot2::waiver() else legend_breaks,
       labels = if (is.null(legend_breaks)) ggplot2::waiver() else legend_labels) +
-    ggplot2::scale_x_continuous(breaks = seq(0, total_months, by = 3)) +
+    ggplot2::scale_x_continuous(breaks = seq(0, total_months, by = x_break_by)) +
     ggplot2::scale_y_continuous(breaks = arms$y, labels = arms$y_label) +
-    ggplot2::coord_cartesian(xlim = c(-0.1, total_months + 0.5), ylim = ylim, expand = FALSE) +
-    ggplot2::labs(x = x_title, y = NULL) +
-    ggplot2::guides(fill = ggplot2::guide_legend(nrow = legend_nrow, title.position = "top")) +
-    ggplot2::theme_classic() +
+    ggplot2::coord_cartesian(xlim = c(-0.1, total_months + 0.1), ylim = ylim, expand = FALSE) +
+    ggplot2::labs(x = x_title, y = NULL, caption = caption) +
+    ggplot2::guides(fill = if (is.null(legend_title)) {
+      ggplot2::guide_legend(nrow = legend_nrow)
+    } else {
+      ggplot2::guide_legend(nrow = legend_nrow, title.position = "top")
+    }) +
+    ggplot2::theme_classic(base_size = base_size) +
     ggplot2::theme(
       legend.position = "top",
-      legend.title = ggplot2::element_text(face = "bold", hjust = 0.5),
-      axis.text.y = ggplot2::element_text(face = "bold", colour = "black"),
+      legend.title = if (is.null(legend_title)) ggplot2::element_blank() else
+        ggplot2::element_text(face = "bold", hjust = 0.5),
+      legend.text = ggplot2::element_text(size = ggplot2::rel(legend_size), colour = "grey20"),
+      legend.key.size = grid::unit(1.2 * legend_size, "lines"),
+      legend.spacing.x = grid::unit(8, "pt"),
+      legend.margin = ggplot2::margin(0, 0, 0, 0),
+      legend.box.spacing = grid::unit(4, "pt"),
+      axis.text.y = ggtext::element_markdown(colour = "black", hjust = 1, lineheight = 1.1,
+                                             margin = ggplot2::margin(r = 6)),
       axis.ticks.y = ggplot2::element_blank(),
-      axis.line.y = ggplot2::element_blank()
+      axis.line.y = ggplot2::element_blank(),
+      axis.text.x = ggplot2::element_text(colour = axis_colour),
+      axis.title.x = ggplot2::element_text(colour = axis_colour),
+      axis.line.x = ggplot2::element_line(colour = "grey50"),
+      axis.ticks.x = ggplot2::element_line(colour = "grey50"),
+      plot.caption = ggplot2::element_text(hjust = 0, colour = "grey30",
+                                           size = ggplot2::rel(0.75)),
+      plot.caption.position = "plot",
+      plot.margin = ggplot2::margin(4, 10, 4, 4)
     )
 }
 
-# Builds the "months at home / in-center / death over 2 years" bar figure (Figure 2) from the
-# bootstrap results and returns it as a ggplot object; saving is left to the caller. No
-# objects from the global environment are used.
-# Three bars (conservative management, choose dialysis, and an extra bar splitting the time at
-# home of the dialysis arm into before / after the start of dialysis), linked by dashed lines;
-# compact legend with a note on the lighter shade.
+# Builds the "months alive at home / alive in-center / dead over 2 years" bar figure (Figure 2)
+# from the bootstrap results and returns it as a ggplot object; saving is left to the caller.
+# No objects from the global environment are used. Needs ggtext.
+# Layout: conservative management on top, dialysis below it (dashed lines connect the segment
+# boundaries), and below that a bar splitting the time at home of the dialysis arm into before /
+# after the start of dialysis, linked to the home segment of the dialysis bar by one curly brace.
 # Arguments
 #   estimate_ci_dt   long table (trt, state, adjustment, estimate, ...) of the point estimates in
 #                    DAYS, states as produced by compute_all_estimates() (incl. "Time at home",
 #                    "In-center", "Days after dialysis", "In-center after dialysis")
 #   bootstrap_dt     long table (b, trt, state, adjustment, value) of the bootstrap replicates, days
-#   days_per_patient per-patient table with a trt column (used for the N per arm)
+#   days_per_patient per-patient table with a trt column (used for the n per arm)
 #   state_cols       names of the states; everything but "Death" counts as alive
 #   state_colors     named colours "At home", "Hospitalization" (used for in-center) and "Death"
 #   adjustment_level which adjustment level of the estimates to plot
 #   days_per_month   days per month for the conversion to months (30.44 = 365.25 / 12)
-#   total_months     length of the follow-up in months; death = total_months - months alive
+#   total_months     length of the follow-up in months; dead = total_months - months alive
+#   arm_names        axis labels of the arms (markdown; <br> = line break), named "1" and "0"
+#   legend_labels    legend labels: home, in-center, dead
+#   text_size        size of the numbers in the figure (ggplot size, mm)
+#   bar_height       height of the bars (y units)
+#   bar_gap_main     space between the conservative management and dialysis bars
+#   bar_gap_brace    space between the dialysis bar and the split bar (holds the brace)
+#   legend_size      size of the legend relative to the base font
+#   ci_caption       add a caption in the figure stating how the CIs were obtained (default
+#                    FALSE: put this in the figure legend of the manuscript instead)
+#   check_ci         print a check of where each point estimate lies within its bootstrap CI
+#                    (also stored as attr(<plot>, "ci_check"))
 create_time_bar_figure <- function(estimate_ci_dt,
                                    bootstrap_dt,
                                    days_per_patient,
@@ -1233,7 +1202,17 @@ create_time_bar_figure <- function(estimate_ci_dt,
                                    state_colors,
                                    adjustment_level = "Adjusted for confounding and censoring",
                                    days_per_month = 30.44,
-                                   total_months = 24) {
+                                   total_months = 24,
+                                   arm_names = c(`1` = "Choose dialysis",
+                                                 `0` = "Choose conservative<br>management"),
+                                   legend_labels = c("Alive at home", "Alive in-center", "Dead"),
+                                   text_size = 4.2,
+                                   bar_height = 0.62,
+                                   bar_gap_main = 0.5,
+                                   bar_gap_brace = 0.4,
+                                   legend_size = 1.2,
+                                   ci_caption = FALSE,
+                                   check_ci = TRUE) {
   # component names
   c_home_total  <- "Total time at home"
   c_home_before <- "Time at home before dialysis"
@@ -1271,15 +1250,20 @@ create_time_bar_figure <- function(estimate_ci_dt,
   pt_wide[, trt := as.character(trt)]
   rep_wide[, trt := as.character(trt)]
   
-  # months for one component: f() takes a table with the state columns (days), returns days
+  # months for one component: f() takes a table with the state columns (days), returns days.
+  # Also returns the mean / median of the bootstrap replicates for the CI check
   component_row <- function(trt_value, component, f) {
     p <- pt_wide[trt == trt_value]
     r <- rep_wide[trt == trt_value]
+    boot <- f(r) / days_per_month
     data.table::data.table(
       trt = trt_value, component = component,
       value = f(p) / days_per_month,
-      lower = quantile(f(r) / days_per_month, 0.025, na.rm = TRUE, names = FALSE),
-      upper = quantile(f(r) / days_per_month, 0.975, na.rm = TRUE, names = FALSE))
+      lower = quantile(boot, 0.025, na.rm = TRUE, names = FALSE),
+      upper = quantile(boot, 0.975, na.rm = TRUE, names = FALSE),
+      boot_mean = mean(boot, na.rm = TRUE),
+      boot_median = median(boot, na.rm = TRUE),
+      n_boot = sum(!is.na(boot)))
   }
   f_home_total  <- function(d) d[["Time at home"]]
   f_center      <- function(d) d[["In-center"]]
@@ -1301,26 +1285,50 @@ create_time_bar_figure <- function(estimate_ci_dt,
   home_split_dt <- rbind(component_row("1", c_home_before, f_home_before),
                          component_row("1", c_home_after,  f_home_after))
   
-  # axis labels with the sample size
-  n_dt <- data.table::as.data.table(days_per_patient)[, .(n = .N), by = .(trt = as.character(trt))]
-  arm_label <- function(trt_value) {
-    paste0(ifelse(trt_value == "1", "Choose dialysis", "Choose conservative\nmanagement"),
-           "\n(N=", n_dt[trt == trt_value, n], ")")
+  # ---- check: where does each point estimate sit within its percentile bootstrap CI? -----
+  # position 0 = at the lower limit, 1 = at the upper limit, ~0.5 = centred. A point estimate
+  # near one end means the bootstrap distribution is shifted relative to the estimate
+  # (bootstrap bias), e.g. because the replicates use fewer imputations / resampled data
+  ci_check <- rbind(base_dt, home_split_dt)[, .(
+    arm = ifelse(trt == "1", "dialysis", "conservative"), component,
+    estimate = value, lower, upper, boot_mean, boot_median,
+    bias = boot_mean - value,
+    position = (value - lower) / (upper - lower),
+    n_boot)]
+  ci_check[, flag := position < 0.15 | position > 0.85]
+  if (check_ci) {
+    cat("\nCheck of point estimates versus percentile bootstrap CIs (months):\n")
+    print(ci_check[, lapply(.SD, function(x) if (is.numeric(x)) round(x, 2) else x)])
+    if (any(ci_check$flag)) {
+      message("Point estimate lies in the outer 15% of its bootstrap CI for: ",
+              paste(ci_check[flag == TRUE, paste0(component, " (", arm, ")")], collapse = "; "),
+              ". Check that estimate and replicates come from the same procedure (same number of ",
+              "imputations, same estimator) before reporting.")
+    }
   }
   
-  # ---- layout: conservative management / choose dialysis / time at home split ---------
-  # vertical positions (larger = higher): the two dialysis bars are close together, with more
-  # room between them and the conservative management bar
-  y_cm    <- 3.2
-  y_dial  <- 2
-  y_split <- 1.4
+  # axis labels: bold name, sample size in grey below it
+  n_dt <- data.table::as.data.table(days_per_patient)[, .(n = .N), by = .(trt = as.character(trt))]
+  grey_txt <- function(x) paste0("<span style='color:#6B6B6B'>", x, "</span>")
+  arm_label <- function(trt_value) {
+    paste0("<b>", arm_names[[trt_value]], "</b><br>",
+           grey_txt(paste0("N = ", format(n_dt[trt == trt_value, n], big.mark = ",", trim = TRUE))))
+  }
+  
+  # ---- layout: conservative management / dialysis / time at home split ----------------
+  y_split <- 1
+  y_dial  <- y_split + bar_height + bar_gap_brace
+  y_cm    <- y_dial  + bar_height + bar_gap_main
+  h <- bar_height / 2
   bar_dt <- rbind(
     base_dt[, .(trt, component, value, lower, upper,
                 y = ifelse(trt == "1", y_dial, y_cm),
-                y_label = sapply(trt, arm_label))],
+                y_label = sapply(trt, arm_label),
+                connect = TRUE)],
     home_split_dt[, .(trt, component, value, lower, upper,
                       y = y_split,
-                      y_label = "Time at home:\nbefore vs. after\nstart of dialysis")]
+                      y_label = paste0("<b>Time at home</b><br>", grey_txt("choose dialysis group")),
+                      connect = FALSE)]
   )
   bar_dt[, side := ifelse(y == y_cm, 1, -1)]
   # connector groups: the parts of the time at home count as one segment
@@ -1328,17 +1336,42 @@ create_time_bar_figure <- function(estimate_ci_dt,
     grepl("home",      component), "home",
     grepl("in-center", component), "center",
     default = "death")]
-  make_time_bar_figure2(
+  
+  # one brace under the home segment of the dialysis bar (pointing at the split bar), and the
+  # names of the two parts under the split bar
+  home_total_dial <- base_dt[trt == "1" & component == c_home_total, value]
+  v_before <- home_split_dt[component == c_home_before, value]
+  v_after  <- home_split_dt[component == c_home_after,  value]
+  braces_extra <- data.frame(x0 = 0, x1 = home_total_dial, y = y_dial - h - 0.05, side = -1)
+  segment_labels <- data.frame(
+    x = c(v_before / 2, v_before + v_after / 2),
+    y = y_split - h - 0.1,
+    label = c("Before dialysis start", "After dialysis start"))
+  
+  n_boot <- max(ci_check$n_boot)
+  caption <- if (ci_caption) {
+    sprintf(paste0("Point estimates from the full cohort; 95%% confidence intervals are ",
+                   "percentile intervals from %s bootstrap replicates."),
+            format(n_boot, big.mark = ","))
+  } else NULL
+  
+  p <- make_time_bar_figure(
     bar_dt           = bar_dt,
     component_colors = bar_colors,
     total_months     = total_months,
-    label_style      = "boxes",
-    connectors       = TRUE,
-    # compact legend: only the three components; the lighter shade is explained in an italic
-    # note below the legend
+    braces_extra     = braces_extra,
+    segment_labels   = segment_labels,
+    bar_height       = bar_height,
+    text_size        = text_size,
+    base_size        = 13,
+    x_break_by       = 6,
+    legend_title     = NULL,
+    legend_size      = legend_size,
     legend_breaks    = c(c_home_total, c_center, c_death),
-    legend_labels    = c("Time at home", "Time in-center", "Death"),
-    legend_note      = "Lighter shade = time at home after start of dialysis",
-    legend_nrow      = 1
+    legend_labels    = legend_labels,
+    legend_nrow      = 1,
+    caption          = caption
   )
+  attr(p, "ci_check") <- ci_check
+  p
 }

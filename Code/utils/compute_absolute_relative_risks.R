@@ -552,7 +552,7 @@ compute_measures <- function(risk_model, data, plot = FALSE) {
     plots = "calibration"
   )
   
-  # discriminiation
+  # discriminiation, pseudo gave similar values than ipcw
   AUC <- Score$AUC$score[["AUC"]]
   
   # calibration intercept

@@ -22,7 +22,13 @@ in_center_days <- function(state, days, in_center_params) {
 
 # Sums the row-level in_center column per patient onto the days-per-state table.
 # Also adds "Time at home" = days alive (all rows except Death) - in-center days, so it
-# includes days at home on dialysis (HD/PD outside the in-center sessions/visits).
+# includes days at home on dialysis (HD/PD outside the in-center sessions/visits), and its
+# components / those of the in-center days:
+#   "Home without dialysis"  = days in the "At home" state
+#   "Home on dialysis"       = HD + PD days - in-center dialysis days
+#   "In-center hospitalized" = in-center days in the Hospitalization state (all hospital days)
+#   "In-center dialysis"     = in-center days in the HD / PD states (sessions / visits)
+# so Home without + Home on dialysis = Time at home, hospitalized + dialysis = In-center.
 add_in_center_per_patient <- function(days_dt, rows_dt) {
   # indicate which part is after dialysis
   # (NA_real_ for patients who never start dialysis: min() of nothing is Inf, which
@@ -38,17 +44,14 @@ add_in_center_per_patient <- function(days_dt, rows_dt) {
   ic <- rows_dt[, .(
     `In-center` = sum(in_center),
     `Time at home` = sum(days_in_row[state != "Death"]) - sum(in_center),
+    `Home without dialysis` = sum(days_in_row[state == "At home"]),
+    `Home on dialysis` = sum(days_in_row[state %in% c("HD", "PD")]) -
+      sum(in_center[state %in% c("HD", "PD")]),
+    `In-center hospitalized` = sum(in_center[state == "Hospitalization"]),
+    `In-center dialysis` = sum(in_center[state %in% c("HD", "PD")]),
     `Days after dialysis` = sum(days_in_row[after_dialysis & state != "Death"]),
     `In-center after dialysis` = sum(in_center[after_dialysis]),
-    # started dialysis (any HD/PD row) and total home / in-center days counted only for
-    # patients who started (0 otherwise): means of these divided by the mean of
-    # "Started dialysis" give the mean among those who started (see compute_all_estimates)
-    `Started dialysis` = as.numeric(any(state %in% c("HD", "PD"))),
-    `Home if started` = as.numeric(any(state %in% c("HD", "PD"))) *
-      (sum(days_in_row[state != "Death"]) - sum(in_center)),
-    `In-center if started` = as.numeric(any(state %in% c("HD", "PD"))) * sum(in_center),
-    `Hospital if started` = as.numeric(any(state %in% c("HD", "PD"))) *
-      sum(days_in_row[state == "Hospitalization"])
+    `Hospital after dialysis` = sum(days_in_row[after_dialysis & state == "Hospitalization"])
   ), by = .(LOPNR, trt)]
   
   # attach the per-patient sums to the days-per-state table
@@ -1218,8 +1221,7 @@ run_one_bootstrap <- function(b,
       days_per_patient_imputed = result$days_per_patient_imputed,
       days_per_patient = result$days_per_patient,
       iptw_dt = result$iptw_dt,
-      state_cols = c(state_cols, in_center_cols),
-      in_center_cols = in_center_cols
+      state_cols = c(state_cols, in_center_cols)
     ),
     cox_fit_summary = summarise_cox_fits(result$cox_models)
   )
@@ -1236,18 +1238,6 @@ weighted_state_means <- function(dt, weight_dt, state_cols) {
   
   # weighted means per arm
   dt[, lapply(.SD, weighted.mean, w = sw_IPTW), by = trt, .SDcols = state_cols]
-}
-
-# Keeps trt and cols, rounded to digits decimals (default whole numbers).
-round_state_cols <- function(dt, cols, digits = 0) {
-  # keep trt and the requested columns
-  dt <- copy(dt)[, c("trt", cols), with = FALSE]
-  
-  # round
-  dt[, (cols) := lapply(.SD, round, digits = digits), .SDcols = cols]
-  
-  # return the table
-  dt
 }
 
 ################################################################################
