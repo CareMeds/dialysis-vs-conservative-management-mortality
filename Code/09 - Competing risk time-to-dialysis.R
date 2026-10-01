@@ -363,7 +363,7 @@ p2 <- ggplot2::ggplot(df_long, ggplot2::aes(x = time, y = Probability, fill = Ev
 # --- Arrange plots side by side ---
 ggplot2::ggsave(
   plot = gridExtra::grid.arrange(p1, p2, ncol = 2),
-  filename = paste0(results_path, "Main/Figure_2.pdf"),
+  filename = paste0(results_path, "Supplemental/Figure_S_time_to_dialysis.png"),
   width = 10,
   height = 5,
   dpi = 300

@@ -73,9 +73,6 @@ dialysis_only <- c(
   "PD -> HD"
 )
 
-# one row per patient per day, day 0 to 729 (2-year horizon)
-time_grid <- seq(0, horizon - 1, by = 1)
-
 ################################################################################
 ### Build baseline_long once (resampled by LOPNR in each bootstrap replicate)
 ################################################################################
@@ -96,9 +93,13 @@ write.xlsx(
 state_order <- c("At home", "Hospitalization", "HD", "PD", "Death")
 state_cols <- state_order[state_order %in% unique(bl$baseline_long$state)]
 
-# Columns added per patient: in-center days, and days / in-center days from the
-# start of dialysis (first HD or PD row) onward; 0 for patients who never start
-in_center_cols <- c("In-center", "Days after dialysis", "In-center after dialysis")
+# Columns added per patient: in-center days, total days at home (days alive - in-center
+# days), and days / in-center days from the start of dialysis (first HD or PD row)
+# onward; 0 for patients who never start. "Started dialysis" (0/1) and the total home /
+# in-center days counted only for starters feed the "among those who started" columns
+in_center_cols <- c("In-center", "Time at home", "Days after dialysis", "In-center after dialysis",
+                    "Started dialysis", "Home if started", "In-center if started",
+                    "Hospital if started")
 
 # columns summarised in the estimate tables: the states plus in-center days
 estimate_cols <- c(state_cols, in_center_cols)
@@ -123,14 +124,12 @@ main <- fit_and_simulate(
   M                     = M,
   transitions           = transitions,
   dialysis_only         = dialysis_only,
-  time_grid             = time_grid,
   state_cols            = state_cols,
   in_center_cols        = in_center_cols,
   in_center_params      = in_center_params
 )
 days_per_patient         <- main$days_per_patient
 days_per_patient_imputed <- main$days_per_patient_imputed
-state_prob_dt            <- main$state_prob_dt
 iptw_dt                  <- main$iptw_dt
 imputations              <- main$imputations
 
@@ -159,7 +158,6 @@ if (recompute_bootstrap) {
     M_bootstrap           = M_bootstrap,
     transitions           = transitions,
     dialysis_only         = dialysis_only,
-    time_grid             = time_grid,
     state_cols            = state_cols,
     in_center_cols        = in_center_cols,
     in_center_params      = in_center_params
@@ -192,6 +190,18 @@ bootstrap_results <- bootstrap_results[!failed]
 # percentile CI per (trt, state, adjustment), merged with the real
 # (non-bootstrapped) point estimate for each of the 4 adjustment levels
 bootstrap_dt <- rbindlist(lapply(bootstrap_results, `[[`, "final"), idcol = "b")
+
+# total days at home (days alive - in-center days) and its % of days alive, taken
+# within each replicate. compute_all_estimates() now returns them; this only derives
+# them from the stored replicates of an older saved bootstrap file, so it does not
+# need to be rerun
+if (!"At home %" %in% bootstrap_dt$state) {
+  bootstrap_dt <- bootstrap_dt[state != "Time at home"]
+  bootstrap_dt <- add_days_at_home(bootstrap_dt,
+                                   alive_cols = setdiff(estimate_cols, c("Death", in_center_cols)),
+                                   by_cols = c("b", "trt", "adjustment"))
+}
+
 estimate_ci_dt <- bootstrap_dt[, .(lower = quantile(value, 0.025, na.rm = TRUE),
                                    upper = quantile(value, 0.975, na.rm = TRUE)), by = .(trt, state, adjustment)]
 
@@ -207,43 +217,80 @@ setorder(estimate_ci_dt, trt, state)
 ################################################################################
 ### Estimate tables
 ################################################################################
-# excludes Death in reporting
-state_cols_in_center <- c(setdiff(state_cols, "Death"), "In-center")
+# states in the figure annotation (days; excludes Death in reporting)
+state_cols_in_center <- c(setdiff(state_cols, "Death"), "In-center", "Time at home")
+
+# The Excel tables only report three measures, in MONTHS: total time at home, total time
+# in-center (incl. hospital days) and total time in hospital. Days -> months with
+# days_per_month days per month (as in the figure and the RMST). "Time at home" = days
+# alive - in-center days (also counts days at home on dialysis).
+days_per_month   <- 30.44  # 365.25 / 12 days per month
+table_state_cols <- c("Time at home", "In-center", "Hospitalization")
+table_labels     <- c(
+  "Time at home"    = "Total months at home",
+  "In-center"       = "Total months in-center",
+  "Hospitalization" = "Total months in hospital"
+)
+
+# renames whichever of the labelled columns are present (all at once, by position)
+rename_state_cols <- function(dt, labels) {
+  dt  <- copy(dt)
+  idx <- match(names(labels), names(dt))
+  ok  <- !is.na(idx)
+  setnames(dt, idx[ok], unname(labels[ok]))
+  dt
+}
 
 # CI table: Dialysis / Conservative management / Difference per adjustment block
-# (Difference is taken within each replicate in compute_all_estimates()).
-# build_ci_table_dt() also adds the columns: In-center (% of days alive),
-# In-center after dialysis (days), In-center (% of days after starting dialysis).
-# The percentages are ratios of means computed in compute_all_estimates(), within
-# each bootstrap replicate, so their CIs are percentile CIs of the ratio itself.
-# The after-dialysis columns are dialysis arm only (empty for CM and Difference).
-diff_label <- "Difference"
-Bootstrap_CI_dt <- build_ci_table_dt(estimate_ci_dt, state_cols_in_center)
-Bootstrap_CI_with_diff_dt <- copy(Bootstrap_CI_dt)
-setnames(Bootstrap_CI_with_diff_dt, "In-center", "In-center (days)")
+# (Difference is taken within each replicate in compute_all_estimates()); estimates and
+# CIs converted from days to months, 1 decimal. extra_cols = FALSE: no percentage columns
+# Patients who started dialysis (amongst those who chose dialysis) get their own row with
+# the same measures as the arms.
+# Row order per adjustment block: choose conservative management, choose dialysis, the
+# difference choose dialysis vs. choose conservative management, then start dialysis
+table_trt_labels <- c(
+  `0`   = "Choose conservative management",
+  `1`   = "Choose dialysis",
+  diff  = "Choose dialysis vs. choose conservative management",
+  start = "Start dialysis (amongst those who chose dialysis)"
+)
 
-# the bootstrap CI first, then "Pooled", then one sheet per imputation's
-# own unpooled estimates (m1...m10) - 12 tabs total
+estimate_ci_months_dt <- copy(estimate_ci_dt)
+estimate_ci_months_dt[state %in% table_state_cols,
+                      `:=`(estimate = estimate / days_per_month,
+                           lower    = lower    / days_per_month,
+                           upper    = upper    / days_per_month)]
+diff_label <- "Difference"
+
+# check of the table: for every measure and adjustment the point estimates (months) per row
+# group, and the difference must equal choose dialysis - choose conservative management.
+# Printed so the numbers can be compared with the Excel table
+table_check <- dcast(estimate_ci_months_dt[state %in% table_state_cols],
+                     adjustment + state ~ trt, value.var = "estimate")
+print(table_check[, .(adjustment, state,
+                      choose_CM = round(`0`, 2), choose_dialysis = round(`1`, 2),
+                      difference = round(diff, 2), start_dialysis = round(start, 2))])
+stopifnot(all(abs(table_check$diff - (table_check$`1` - table_check$`0`)) < 1e-8))
+
+Bootstrap_CI_dt <- build_ci_table_dt(estimate_ci_months_dt, table_state_cols,
+                                     trt_labels = table_trt_labels,
+                                     digits = 1, extra_cols = FALSE)
+Bootstrap_CI_with_diff_dt <- rename_state_cols(Bootstrap_CI_dt, table_labels)
+
+# the bootstrap CI first (its point estimates are the pooled estimates), then one sheet per
+# imputation's own unpooled estimates (m1...m10) - 11 tabs total
 estimate_sheets <- c(
-  list(
-    Bootstrap_CI = Bootstrap_CI_with_diff_dt,
-    Pooled = build_estimate_table_dt(
-      days_per_patient_imputed,
-      days_per_patient,
-      iptw_dt,
-      estimate_cols,
-      state_cols_in_center
-    )
-  ),
+  list(Bootstrap_CI = Bootstrap_CI_with_diff_dt),
   setNames(
     lapply(imputations, function(imp)
-      build_estimate_table_dt(
+      rename_state_cols(build_estimate_table_dt(
         imp$days_per_patient_imputed,
         days_per_patient,
         iptw_dt,
         estimate_cols,
-        state_cols_in_center
-      )),
+        table_state_cols,
+        days_per_month = days_per_month
+      ), table_labels)),
     paste0("m", seq_along(imputations))
   )
 )
@@ -258,88 +305,38 @@ write.xlsx(
 )
 
 ################################################################################
-### Figure: state occupancy over time (observed + simulated), by trt
+### Colours for the states (used by the bar figure)
 ################################################################################
-# pooled (multiply imputed) mean cumulative days
-# time-varying CI for the left (cumulative) panel only: percentile CI per
-# (time, trt, state) across the bootstrap replicates' full curves
-state_prob_bootstrap_dt <- rbindlist(lapply(bootstrap_results, `[[`, "state_prob_dt"), idcol = "b")
-state_prob_ci_dt <- state_prob_bootstrap_dt[, .(
-  lower = quantile(mean_cumulative_days, 0.025),
-  upper = quantile(mean_cumulative_days, 0.975)
-), by = .(time, trt, state)]
-state_prob_dt <- merge(state_prob_dt, state_prob_ci_dt, by = c("time", "trt", "state"))
-
-# stacking order: "At home" at bottom, "Death" at top - flip state_levels
-# if your ggplot2 version stacks the other way
-state_levels <- c("At home", "Hospitalization", "HD", "PD", "Death")
-state_prob_dt[, state := factor(state, levels = state_levels)]
-
-# reuses the project's manual_colors if in scope; previously assigned 6
-# colors to 5 names - fixed here to exactly 5, Death using "#FF7F00"
-state_colors <- setNames(c(manual_colors[c(3, 2, 4, 1)], "#FF7F00"), state_levels)
+# the bar figure only uses three colours, the first three of manual_colors: green for time at
+# home, blue for in-center (the Hospitalization colour) and red for death
+state_levels <- c("At home", "Hospitalization", "Death")
+state_colors <- setNames(manual_colors[c(3, 2, 1)], state_levels)
 
 ################################################################################
-### Figure: state probability (left) and state occupancy (right), by trt
+### Figure 2: months at home / in-center / death over 2 years, by trt
 ################################################################################
-# only one panel keeps its legend (colors are shared)
-p_cum_dialysis    <- make_state_panel(state_prob_dt = state_prob_dt, 
-                                      state_colors = state_colors, 
-                                      trt_value = 1, 
-                                      type = "cumulative", 
-                                      show_legend = TRUE) +
-  ggplot2::labs(title = "Choose dialysis")
-p_stack_dialysis  <- make_state_panel(state_prob_dt = state_prob_dt, 
-                                      state_colors = state_colors, 
-                                      trt_value = 1, 
-                                      type = "stacked", 
-                                      show_legend = FALSE)
-p_cum_cm          <- make_state_panel(state_prob_dt = state_prob_dt, 
-                                      state_colors = state_colors, 
-                                      trt_value = 0, 
-                                      type = "cumulative",
-                                      show_legend = FALSE) +
-  ggplot2::labs(title = "Choose conservative management")
-p_stack_cm        <- make_state_panel(state_prob_dt = state_prob_dt, 
-                                      state_colors = state_colors, 
-                                      trt_value = 0, 
-                                      type = "stacked",
-                                      show_legend = FALSE)
-
-################################################################################
-### Annotate the state-probability panels
-################################################################################
-# annotation includes In-center (a subset of other states, so text only, not a curve)
-# rows after the header of the "confounding and censoring" block: Dialysis, then CM
-final_block_row <- which(Bootstrap_CI_dt$trt == "Adjusted for confounding and censoring")
-p_cum_dialysis <- annotate_state_probability(
-  p              = p_cum_dialysis,
-  estimate_ci_dt = estimate_ci_dt,
-  trt_value      = 1,
-  state_cols     = state_cols_in_center,
-  state_prob_dt  = state_prob_dt
-)
-p_cum_cm <- annotate_state_probability(
-  p              = p_cum_cm,
-  estimate_ci_dt = estimate_ci_dt,
-  trt_value      = 0,
-  state_cols     = state_cols_in_center,
-  state_prob_dt  = state_prob_dt
+# Three bars: conservative management, choose dialysis, and an extra bar that splits the time
+# at home of the dialysis arm into before / after the start of dialysis, with dashed lines
+# linking the blocks so their sizes can be compared. Each of the first two bars: mean total time
+# at home + mean total time in-center + death (the remaining time) = 2 years = 24 months.
+# Confounding+censoring-adjusted estimates with bootstrap 95% CIs. Days are converted to months
+# with days_per_month (30.44 = 365.25 / 12); death = 24 months - months alive. The figure is
+# built by create_time_bar_figure() in plots.R
+p_time_bars <- create_time_bar_figure(
+  estimate_ci_dt   = estimate_ci_dt,
+  bootstrap_dt     = bootstrap_dt,
+  days_per_patient = days_per_patient,
+  state_cols       = state_cols,
+  state_colors     = state_colors,
+  adjustment_level = "Adjusted for confounding and censoring",
+  days_per_month   = days_per_month,
+  total_months     = 24
 )
 
-combined_plot <- (p_cum_dialysis | p_stack_dialysis) /
-  (p_cum_cm | p_stack_cm) +
-  patchwork::plot_layout(guides = "collect") &
-  ggplot2::theme(
-    legend.position = "bottom",
-    legend.direction = "horizontal",
-    legend.box.just = "center"
-  )
-
-ggplot2::ggsave(
-  plot = combined_plot,
-  filename = paste0(results_path, "Supplemental/Figure_S_home_time.png"),
-  width = 10,
-  height = 8,
-  dpi = 300
-)
+p_time_bars
+ggplot2::ggsave(plot = p_time_bars,
+                filename = paste0(results_path, "Main/Figure_2.pdf"),
+                width = 10, height = 5, dpi = 300)
+ggplot2::ggsave(plot = p_time_bars,
+                filename = paste0(results_path, "Main/Figure_2.png"),
+                width = 10, height = 5, dpi = 300)

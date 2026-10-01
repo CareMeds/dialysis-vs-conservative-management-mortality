@@ -31,12 +31,26 @@ source("Code/utils/compute_absolute_relative_risks.R")
 # load data
 load("Data/cohort_with_models.Rdata")
 
+# The two time-consuming bootstrap parts can be recomputed or loaded from a saved file:
+#   recompute_validation: TRUE = rerun the internal validation (optimism-corrected calibration
+#                         and AUC of the risk model) and save the results to the Data folder;
+#                         FALSE = load the saved results
+#   recompute_bootstrap:  TRUE = rerun the bootstrap of the HTE estimates and save the results
+#                         to the Data folder; FALSE = load the saved results
+# Everything after the bootstrap (tables and figures) always runs. Set a flag to TRUE the first
+# time and whenever the data, the models or the number of bootstraps change
+recompute_validation <- TRUE
+recompute_bootstrap  <- TRUE
+validation_file <- "Data/HTE_validation_results.Rdata"
+bootstrap_file  <- "Data/HTE_bootstrap_results.Rdata"
+for (f in c(if (!recompute_validation) validation_file,
+            if (!recompute_bootstrap) bootstrap_file)) {
+  if (!file.exists(f)) stop("Saved results ", f, " not found - set the matching recompute flag to TRUE")
+}
+
 ################################################################################
 ### Internal 2-year time-to-event risk model
 ################################################################################
-# perform internal validation 
-validate <- TRUE
-
 # make outcome for elig cohort
 elig_Surv <- survival::Surv(elig_cohort$time2event_death_2y, elig_cohort$event_death_2y)
 
@@ -91,87 +105,96 @@ dev.off()
 # ################################################################################
 # ### Internal validation
 # ################################################################################
-# --- Initialise storage --------------------------------------------------
-if (!validate){
-  n_bootstraps_elig <- 1
-} else {
+if (recompute_validation) {
+  # --- Initialise storage --------------------------------------------------
   n_bootstraps_elig <- 1000
-}
-n_iter <- n_bootstraps_elig + 1L          # iteration 1 = original sample
-
-metrics <- list(
-  orig = data.frame(
-    elig_Intercept = numeric(n_iter),
-    elig_Slope     = numeric(n_iter),
-    elig_AUC       = numeric(n_iter),
-    trt_Intercept  = numeric(n_iter),
-    trt_Slope      = numeric(n_iter),
-    trt_AUC        = numeric(n_iter)
-  ),
-  boot = data.frame(
-    elig_Intercept = numeric(n_iter),
-    elig_Slope     = numeric(n_iter),
-    elig_AUC       = numeric(n_iter),
-    trt_Intercept  = numeric(n_iter),
-    trt_Slope      = numeric(n_iter),
-    trt_AUC        = numeric(n_iter)
-  )
-)
-
-cal_plots <- list()
-
-# --- Main loop -----------------------------------------------------------
-for (B in seq_len(n_iter)) {
+  n_iter <- n_bootstraps_elig + 1L          # iteration 1 = original sample
   
-  is_original <- (B == 1L)
-  
-  # 1. Draw samples -------------------------------------------------------
-  if (is_original) {
-    boot_elig    <- elig_cohort
-    boot_trt_dec <- baseline
-  } else {
-    boot_elig    <- elig_cohort[sample(nrow(elig_cohort), replace = TRUE), ]
-    boot_trt_dec <- baseline[sample(nrow(baseline),       replace = TRUE), ]
-  }
-  
-  # 2. Fit risk model on bootstrap sample ---------------------------------
-  boot_risk_model <- rms::cph(
-    survival::Surv(time2event_death_2y, event_death_2y) ~
-      age + egfr2021 + cancer + dm + ihd + vhd + pvd + female + albumin,
-    data   = boot_elig,
-    method = "breslow",
-    y      = TRUE,
-    x      = TRUE
+  metrics <- list(
+    orig = data.frame(
+      elig_Intercept = numeric(n_iter),
+      elig_Slope     = numeric(n_iter),
+      elig_AUC       = numeric(n_iter),
+      trt_Intercept  = numeric(n_iter),
+      trt_Slope      = numeric(n_iter),
+      trt_AUC        = numeric(n_iter)
+    ),
+    boot = data.frame(
+      elig_Intercept = numeric(n_iter),
+      elig_Slope     = numeric(n_iter),
+      elig_AUC       = numeric(n_iter),
+      trt_Intercept  = numeric(n_iter),
+      trt_Slope      = numeric(n_iter),
+      trt_AUC        = numeric(n_iter)
+    )
   )
   
-  # 3. Evaluate on original sample (apparent for B=1, optimism for B>1) --
-  elig_orig <- compute_measures(boot_risk_model,
-                                data = elig_cohort,
-                                plot = is_original)
-  trt_orig  <- compute_measures(boot_risk_model,
-                                data = baseline,
-                                plot = is_original)
+  # the model output of the original sample is stored, the calibration plots are built from it
+  # below, so a saved validation can be replotted without rerunning the bootstrap
+  cal_inputs <- list()
   
-  if (is_original) {
-    cal_plots$elig <- calibration_plot(elig_orig)
-    cal_plots$trt  <- calibration_plot(trt_orig)
+  # --- Main loop -----------------------------------------------------------
+  for (B in seq_len(n_iter)) {
+    
+    is_original <- (B == 1L)
+    
+    # 1. Draw samples -------------------------------------------------------
+    if (is_original) {
+      boot_elig    <- elig_cohort
+      boot_trt_dec <- baseline
+    } else {
+      boot_elig    <- elig_cohort[sample(nrow(elig_cohort), replace = TRUE), ]
+      boot_trt_dec <- baseline[sample(nrow(baseline),       replace = TRUE), ]
+    }
+    
+    # 2. Fit risk model on bootstrap sample ---------------------------------
+    boot_risk_model <- rms::cph(
+      survival::Surv(time2event_death_2y, event_death_2y) ~
+        age + egfr2021 + cancer + dm + ihd + vhd + pvd + female + albumin,
+      data   = boot_elig,
+      method = "breslow",
+      y      = TRUE,
+      x      = TRUE
+    )
+    
+    # 3. Evaluate on original sample (apparent for B=1, optimism for B>1) --
+    elig_orig <- compute_measures(boot_risk_model,
+                                  data = elig_cohort,
+                                  plot = is_original)
+    trt_orig  <- compute_measures(boot_risk_model,
+                                  data = baseline,
+                                  plot = is_original)
+    
+    if (is_original) {
+      cal_inputs$elig <- elig_orig
+      cal_inputs$trt  <- trt_orig
+    }
+    
+    # 4. Evaluate on bootstrap sample (needed only for optimism correction) -
+    if (!is_original) {
+      elig_boot <- compute_measures(boot_risk_model, data = boot_elig)
+      trt_boot  <- compute_measures(boot_risk_model, data = boot_trt_dec)
+    }
+    
+    # 5. Store results ------------------------------------------------------
+    metrics$orig[B, ] <- c(extract_metrics(elig_orig),
+                           extract_metrics(trt_orig))
+    
+    if (!is_original) {
+      metrics$boot[B, ] <- c(extract_metrics(elig_boot),
+                             extract_metrics(trt_boot))
+    }
   }
   
-  # 4. Evaluate on bootstrap sample (needed only for optimism correction) -
-  if (!is_original) {
-    elig_boot <- compute_measures(boot_risk_model, data = boot_elig)
-    trt_boot  <- compute_measures(boot_risk_model, data = boot_trt_dec)
-  }
-  
-  # 5. Store results ------------------------------------------------------
-  metrics$orig[B, ] <- c(extract_metrics(elig_orig),
-                         extract_metrics(trt_orig))
-  
-  if (!is_original) {
-    metrics$boot[B, ] <- c(extract_metrics(elig_boot),
-                           extract_metrics(trt_boot))
-  }
+  save(metrics, cal_inputs, file = validation_file)
+} else {
+  load(validation_file)   # restores metrics and cal_inputs
+  cat("Loaded saved validation results from", validation_file, "\n")
 }
+
+# calibration plots (original sample) from the stored model output
+cal_plots <- list(elig = calibration_plot(cal_inputs$elig),
+                  trt  = calibration_plot(cal_inputs$trt))
 
 # --- Compute optimism (rows 2:n = bootstrap iterations) -----------------
 # metrics$boot[1, ] is never filled (all zeros) — optimism correctly uses [-1, ]
@@ -271,150 +294,176 @@ names_metrics <- c("RD", "dRMST", "RR", "HR")
 # set subgroups
 data_sets <- c("baseline", "baseline[Davies_score >= 2]")
 
-for (nr_analysis in 1:2) {
-  cat("Perform analysis on",
-      ifelse(nr_analysis == 1, "full data\n", "Davies >= 2 data\n"))
-  # determine LP and survival probability using risk model
-  analysis_data <- eval(parse(text = data_sets[nr_analysis]))
-  analysis_data$lp_risk <- predict(risk_model, newdata = analysis_data)
-  analysis_data$pred_risk <- PredictionTools::fun.event(h0 = table_risk$h0, 
-                                                        lp = analysis_data$lp_risk)
-  
-  # compute estimates across 100 risk points
-  for (B in 1:(n_bootstraps + 1)) {
-    if (B == 1) {
-      # Original sample
-      bootstrap <- analysis_data
-    } else{
-      # create bootstrap sample
-      bootstrap <- analysis_data[sample(1:nrow(analysis_data), replace = TRUE), ]
-    }
+if (recompute_bootstrap) {
+  for (nr_analysis in 1:2) {
+    cat("Perform analysis on",
+        ifelse(nr_analysis == 1, "full data\n", "Davies >= 2 data\n"))
+    # determine LP and survival probability using risk model
+    analysis_data <- eval(parse(text = data_sets[nr_analysis]))
+    analysis_data$lp_risk <- predict(risk_model, newdata = analysis_data)
+    analysis_data$pred_risk <- PredictionTools::fun.event(h0 = table_risk$h0, 
+                                                          lp = analysis_data$lp_risk)
     
-    # re-estimate weights
-    bootstrap_reestimated <- create_weights(
-      data = bootstrap,
-      id_name = id_name,
-      model_PS = model_PS,
-      w_meth = "IPTW",
-      catvar = catvar,
-      contvar = contvar,
-      verbose = FALSE
-    )
-    bootstrap$sw_IPTW <- bootstrap_reestimated$data$w
-    
-    # check SMDs
-    if (B == 1) {
-      table_one_weighted <- create_baseline_table(
-        data = bootstrap_reestimated$data,
-        id_name = "LOPNR",
-        weights = bootstrap_reestimated$data$w,
-        vars = listvar,
-        categoricalVars = catvar,
-        continuousVars = contvar,
-        IQRVars = non_normal_vars,
-        treatmentColumn = trt_var,
-        treatmentLabel = treatment_label,
-        controlLabel = control_label,
-        tableCaption = paste("Subgroup", 2)
-      )
-      cat("Number of SMDs > 0.1",
-          sum(table_one_weighted$smd_table > 0.1),
-          "\n")
-    }
-    
-    # compute HTE across age
-    show_test <- ifelse(B == 1, TRUE, FALSE)
-    age_df <- compute_HTE(
-      data = bootstrap,
-      unit = unit,
-      horizon = horizon,
-      event_var = outcome_var,
-      time2event_var = time2outcome_var,
-      effect_modifier = "age",
-      effect_modifier_range = seq(65, 95, 1),
-      add_interaction = TRUE,
-      test_relative_HTE = show_test
-    )
-    
-    # compute HTE across sex
-    show_test <- ifelse(B == 1, TRUE, FALSE)
-    sex_df <- compute_HTE(
-      data = bootstrap,
-      unit = unit,
-      horizon = horizon,
-      event_var = outcome_var,
-      time2event_var = time2outcome_var,
-      effect_modifier = "female",
-      effect_modifier_range = c(1, 2), # as.numeric() creates 1 and 2
-      add_interaction = TRUE,
-      test_relative_HTE = show_test
-    )
-    
-    # compute HTE across predicted risk
-    # get corresponding linear predictor
-    lp_range <- log(-log(1 - p_range) / table_risk$h0)
-    pred_risk_df <- compute_HTE(
-      data = bootstrap,
-      unit = unit,
-      horizon = horizon,
-      event_var = outcome_var,
-      time2event_var = time2outcome_var,
-      effect_modifier = "lp_risk",
-      effect_modifier_range = sort(c(
-        seq(lp_range[1], lp_range[3], length.out = 99), lp_range[2]
-      )),
-      add_interaction = TRUE,
-      test_relative_HTE = show_test
-    )
-    
-    # save results
-    if (B == 1) {
-      # report effect modifier using probabilities and not linear predictor
-      pred_risk_df$effect_modifier_range <- PredictionTools::fun.event(h0 = table_risk$h0,
-                                                                       lp = pred_risk_df$effect_modifier_range)
-      summary(pred_risk_df$effect_modifier_range)
-      
-      # create seperate dt for each estimate
-      dfs <- list(age = age_df, pred_risk = pred_risk_df, sex = sex_df)
-      for (df_name in names(dfs)) {
-        # set colnames of dt to effect_modifier_range
-        for (metric in names_metrics) {
-          var_name <- paste0(df_name, "_", metric)
-          assign(var_name, dfs[[df_name]][, c("effect_modifier_range", metric)])
-        }
-        
-        # set p-value
-        p_raw <- unique(dfs[[df_name]]$p_for_HTE)
-        p_fmt <- ifelse(p_raw < 0.001, "<0.001", sprintf("%.3f", p_raw))
-        assign(paste0("p_value_", df_name), p_fmt)
+    # reset seed so whether the validation is recomputed or loaded does not impact results
+    set.seed(1)
+    # compute estimates across 100 risk points
+    for (B in 1:(n_bootstraps + 1)) {
+      if (B == 1) {
+        # Original sample
+        bootstrap <- analysis_data
+      } else{
+        # create bootstrap sample
+        bootstrap <- analysis_data[sample(1:nrow(analysis_data), replace = TRUE), ]
       }
-    } else{
-      # bootstrapped sample
-      age_RD[, paste0("boot_", B - 1)] <- age_df$RD
-      age_RR[, paste0("boot_", B - 1)] <- age_df$RR
-      age_dRMST[, paste0("boot_", B - 1)] <- age_df$dRMST
-      age_HR[, paste0("boot_", B - 1)] <- age_df$HR
       
-      sex_RD[, paste0("boot_", B - 1)] <- sex_df$RD
-      sex_RR[, paste0("boot_", B - 1)] <- sex_df$RR
-      sex_dRMST[, paste0("boot_", B - 1)] <- sex_df$dRMST
-      sex_HR[, paste0("boot_", B - 1)] <- sex_df$HR
+      # re-estimate weights
+      bootstrap_reestimated <- create_weights(
+        data = bootstrap,
+        id_name = id_name,
+        model_PS = model_PS,
+        w_meth = "IPTW",
+        catvar = catvar,
+        contvar = contvar,
+        verbose = FALSE
+      )
+      bootstrap$sw_IPTW <- bootstrap_reestimated$data$w
       
-      pred_risk_RD[, paste0("boot_", B - 1)] <- pred_risk_df$RD
-      pred_risk_RR[, paste0("boot_", B - 1)] <- pred_risk_df$RR
-      pred_risk_dRMST[, paste0("boot_", B - 1)] <- pred_risk_df$dRMST
-      pred_risk_HR[, paste0("boot_", B - 1)] <- pred_risk_df$HR
+      # check SMDs
+      if (B == 1) {
+        table_one_weighted <- create_baseline_table(
+          data = bootstrap_reestimated$data,
+          id_name = "LOPNR",
+          weights = bootstrap_reestimated$data$w,
+          vars = listvar,
+          categoricalVars = catvar,
+          continuousVars = contvar,
+          IQRVars = non_normal_vars,
+          treatmentColumn = trt_var,
+          treatmentLabel = treatment_label,
+          controlLabel = control_label,
+          tableCaption = paste("Subgroup", 2)
+        )
+        cat("Number of SMDs > 0.1",
+            sum(table_one_weighted$smd_table > 0.1),
+            "\n")
+      }
+      
+      # compute HTE across age
+      show_test <- ifelse(B == 1, TRUE, FALSE)
+      age_df <- compute_HTE(
+        data = bootstrap,
+        unit = unit,
+        horizon = horizon,
+        event_var = outcome_var,
+        time2event_var = time2outcome_var,
+        effect_modifier = "age",
+        effect_modifier_range = seq(65, 95, 1),
+        add_interaction = TRUE,
+        test_relative_HTE = show_test
+      )
+      
+      # compute HTE across sex
+      show_test <- ifelse(B == 1, TRUE, FALSE)
+      sex_df <- compute_HTE(
+        data = bootstrap,
+        unit = unit,
+        horizon = horizon,
+        event_var = outcome_var,
+        time2event_var = time2outcome_var,
+        effect_modifier = "female",
+        effect_modifier_range = c(1, 2), # as.numeric() creates 1 and 2
+        add_interaction = TRUE,
+        test_relative_HTE = show_test
+      )
+      
+      # compute HTE across predicted risk
+      # get corresponding linear predictor
+      lp_range <- log(-log(1 - p_range) / table_risk$h0)
+      pred_risk_df <- compute_HTE(
+        data = bootstrap,
+        unit = unit,
+        horizon = horizon,
+        event_var = outcome_var,
+        time2event_var = time2outcome_var,
+        effect_modifier = "lp_risk",
+        effect_modifier_range = sort(c(
+          seq(lp_range[1], lp_range[3], length.out = 99), lp_range[2]
+        )),
+        add_interaction = TRUE,
+        test_relative_HTE = show_test
+      )
+      
+      # save results
+      if (B == 1) {
+        # report effect modifier using probabilities and not linear predictor
+        pred_risk_df$effect_modifier_range <- PredictionTools::fun.event(h0 = table_risk$h0,
+                                                                         lp = pred_risk_df$effect_modifier_range)
+        summary(pred_risk_df$effect_modifier_range)
+        
+        # create seperate dt for each estimate
+        dfs <- list(age = age_df, pred_risk = pred_risk_df, sex = sex_df)
+        for (df_name in names(dfs)) {
+          # set colnames of dt to effect_modifier_range
+          for (metric in names_metrics) {
+            var_name <- paste0(df_name, "_", metric)
+            assign(var_name, dfs[[df_name]][, c("effect_modifier_range", metric)])
+          }
+          
+          # set p-value
+          p_raw <- unique(dfs[[df_name]]$p_for_HTE)
+          p_fmt <- ifelse(p_raw < 0.001, "<0.001", sprintf("%.3f", p_raw))
+          assign(paste0("p_value_", df_name), p_fmt)
+        }
+      } else{
+        # bootstrapped sample
+        age_RD[, paste0("boot_", B - 1)] <- age_df$RD
+        age_RR[, paste0("boot_", B - 1)] <- age_df$RR
+        age_dRMST[, paste0("boot_", B - 1)] <- age_df$dRMST
+        age_HR[, paste0("boot_", B - 1)] <- age_df$HR
+        
+        sex_RD[, paste0("boot_", B - 1)] <- sex_df$RD
+        sex_RR[, paste0("boot_", B - 1)] <- sex_df$RR
+        sex_dRMST[, paste0("boot_", B - 1)] <- sex_df$dRMST
+        sex_HR[, paste0("boot_", B - 1)] <- sex_df$HR
+        
+        pred_risk_RD[, paste0("boot_", B - 1)] <- pred_risk_df$RD
+        pred_risk_RR[, paste0("boot_", B - 1)] <- pred_risk_df$RR
+        pred_risk_dRMST[, paste0("boot_", B - 1)] <- pred_risk_df$dRMST
+        pred_risk_HR[, paste0("boot_", B - 1)] <- pred_risk_df$HR
+      }
+    }
+    
+    # add nr_analysis to dt
+    for (df_name in names(dfs)) {
+      for (metric in names_metrics) {
+        var_name <- paste0(df_name, "_", metric)
+        assign(paste0(var_name, "_", nr_analysis), get(var_name))
+      }
+      assign(paste0("p_value_", df_name, "_", nr_analysis), get(paste0("p_value_", df_name)))
     }
   }
   
-  # add nr_analysis to dt
-  for (df_name in names(dfs)) {
-    for (metric in names_metrics) {
-      var_name <- paste0(df_name, "_", metric)
-      assign(paste0(var_name, "_", nr_analysis), get(var_name))
-    }
-    assign(paste0("p_value_", df_name, "_", nr_analysis), get(paste0("p_value_", df_name)))
-  }
+  # save everything the figures and tables below need: per analysis (suffix _1 = full data, _2 =
+  # Davies >= 2) the estimates with a column per bootstrap sample and the p-value for the
+  # interaction, and the objects without suffix (as left behind by the last analysis; they
+  # are saved in cohort_with_prob.Rdata at the end of this script)
+  effect_modifier_names <- c("age", "pred_risk", "sex")
+  hte_grid <- expand.grid(em = effect_modifier_names, metric = names_metrics, nr = 1:2,
+                          stringsAsFactors = FALSE)
+  hte_objects <- unique(c(
+    paste0(hte_grid$em, "_", hte_grid$metric, "_", hte_grid$nr),
+    paste0("p_value_", hte_grid$em, "_", hte_grid$nr),
+    paste0(hte_grid$em, "_", hte_grid$metric),
+    paste0("p_value_", hte_grid$em)
+  ))
+  bootstrap_n_used <- n_bootstraps
+  save(list = c(hte_objects, "bootstrap_n_used"), file = bootstrap_file)
+} else {
+  load(bootstrap_file)   # restores the same objects (age_RD_1, p_value_age_1, ...)
+  cat("Loaded saved HTE bootstrap results from", bootstrap_file, "\n")
+  if (bootstrap_n_used != n_bootstraps)
+    warning("The saved results use ", bootstrap_n_used, " bootstrap samples, but n_bootstraps is ",
+            n_bootstraps, ". Set recompute_bootstrap <- TRUE to use the current value.")
 }
 
 # compute figures and tables
@@ -590,12 +639,12 @@ for (nr_analysis in 1:2) {
   # small text-only panels used as row titles
   age_row_title <- ggplot2::ggplot() +
     ggplot2::theme_void() +
-    ggplot2::labs(title = "Effect modification by age") +
+    ggplot2::labs(title = "A. Effect modification by age") +
     ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5, face = "bold", size = 24))
   
   pred_risk_row_title <- ggplot2::ggplot() +
     ggplot2::theme_void() +
-    ggplot2::labs(title = "Effect modification by 2-year mortality risk (%)") +
+    ggplot2::labs(title = "B. Effect modification by 2-year mortality risk (%)") +
     ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5, face = "bold", size = 24))
   
   # small text-only panels used as one shared x-axis label per row
@@ -616,6 +665,7 @@ for (nr_analysis in 1:2) {
       age_row_title /
         (age_RD_plot | age_RR_plot | age_dRMST_plot | age_HR_plot) /
         age_x_label /
+        patchwork::plot_spacer() /          
         pred_risk_row_title /
         (
           pred_risk_RD_plot | 
@@ -625,7 +675,7 @@ for (nr_analysis in 1:2) {
         ) /
         pred_risk_x_label
     ) +
-      patchwork::plot_layout(heights = c(0.05, 1, 0.04, 0.05, 1, 0.04)),
+      patchwork::plot_layout(heights = c(0.05, 1, 0.04, 0.15, 0.05, 1, 0.04)),
     filename = paste0(
       results_path,
       ifelse(
@@ -678,11 +728,11 @@ openxlsx::write.xlsx(
   rowNames = FALSE,
   file = paste0(results_path, "Supplemental/Table_S_HTE_age.xlsx")
 )
-openxlsx::write.xlsx(
-  HTE_table_sex,
-  rowNames = FALSE,
-  file = paste0(results_path, "Other/Table_S_HTE_sex.xlsx")
-)
+# openxlsx::write.xlsx(
+#   HTE_table_sex,
+#   rowNames = FALSE,
+#   file = paste0(results_path, "Other/Table_S_HTE_sex.xlsx")
+# )
 openxlsx::write.xlsx(
   HTE_table_pred_risk,
   rowNames = FALSE,
@@ -717,17 +767,5 @@ save(
   table_risk,
   ITE_model_lp,
   ITE_model_age,
-  age_RD,
-  age_RR,
-  age_dRMST,
-  age_HR,
-  sex_RD,
-  sex_RR,
-  sex_dRMST,
-  sex_HR,
-  pred_risk_RD,
-  pred_risk_RR,
-  pred_risk_dRMST,
-  pred_risk_HR,
   file = file.path("Data/cohort_with_prob.Rdata")
 )
