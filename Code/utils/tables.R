@@ -468,7 +468,7 @@ build_home_time_table_dt <- function(estimate_ci_months_dt,
       "   On dialysis",
       "In-center",
       "   Hospitalized",
-      "   On dialysis"
+      "   Dialysis sessions"
     ),
     state = c(
       "Time at home",
