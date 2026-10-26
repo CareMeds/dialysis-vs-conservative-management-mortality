@@ -329,9 +329,33 @@ p_time_bars <- create_time_bar_figure(
   state_colors     = state_colors,
   adjustment_level = "Adjusted for confounding and censoring",
   days_per_month   = days_per_month,
-  total_months     = 24
+  total_months     = horizon / 30.44
 )
 
 ggplot2::ggsave(plot = p_time_bars,
                 filename = paste0(results_path, "Main/Figure_2.pdf"),
                 width = 10, height = 5, dpi = 300)
+
+cat("Percentages for those who chose dialysis \n",
+    "Spending time in-center due to dialysis (months)       :", 
+    as.numeric(estimate_ci_dt[trt==1 &
+                                adjustment == "Adjusted for confounding and censoring" & 
+                                state == "In-center dialysis", "estimate"] / 30.44), "\n",
+    "Spending time in-center due to dialysis (months)       :", 
+    as.numeric(estimate_ci_dt[trt==1 &
+                                adjustment == "Adjusted for confounding and censoring" & 
+                                state == "In-center dialysis", "estimate"] / 
+                 estimate_ci_dt[trt==1 &
+                                  adjustment == "Adjusted for confounding and censoring" & 
+                                  state == "In-center", "estimate"] * 100), "\n",
+    "Spending time in-center due to hospitalization (months):",
+    as.numeric(estimate_ci_dt[trt==1 &
+                                adjustment == "Adjusted for confounding and censoring" & 
+                                state == "In-center hospitalized", "estimate"] / 30.44), "\n",
+    "Spending time in-center due to hospitalization (%)     :",
+    as.numeric(estimate_ci_dt[trt==1 &
+                                adjustment == "Adjusted for confounding and censoring" & 
+                                state == "In-center hospitalized", "estimate"] / 
+                 estimate_ci_dt[trt==1 &
+                                  adjustment == "Adjusted for confounding and censoring" & 
+                                  state == "In-center", "estimate"] * 100), "\n")
