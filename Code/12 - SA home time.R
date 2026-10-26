@@ -329,7 +329,7 @@ p_time_bars <- create_time_bar_figure(
   state_colors     = state_colors,
   adjustment_level = "Adjusted for confounding and censoring",
   days_per_month   = days_per_month,
-  total_months     = horizon / 30.44
+  total_months     = 24
 )
 
 ggplot2::ggsave(plot = p_time_bars,
