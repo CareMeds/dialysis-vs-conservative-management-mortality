@@ -40,8 +40,8 @@ load("Data/cohort_with_models.Rdata")
 #                         to the Data folder; FALSE = load the saved results
 # Everything after the bootstrap (tables and figures) always runs. Set a flag to TRUE the first
 # time and whenever the data, the models or the number of bootstraps change
-recompute_validation <- FALSE   # no saved validation results yet, so skip it
-recompute_bootstrap  <- TRUE
+recompute_validation <- FALSE   
+recompute_bootstrap  <- FALSE
 validation_file <- "Data/HTE_validation_results.Rdata"
 bootstrap_file  <- "Data/HTE_bootstrap_results.Rdata"
 for (f in c(if (!recompute_bootstrap) bootstrap_file)) {
@@ -641,7 +641,7 @@ for (nr_analysis in 1:2) {
   
   pred_risk_row_title <- ggplot2::ggplot() +
     ggplot2::theme_void() +
-    ggplot2::labs(title = "B. Effect modification by 2-year mortality risk (%)") +
+    ggplot2::labs(title = "B. Effect modification by predicted 2-year mortality risk (%)") +
     ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5, face = "bold", size = 24))
   
   # small text-only panels used as one shared x-axis label per row
