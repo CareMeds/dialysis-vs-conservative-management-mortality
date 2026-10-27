@@ -4,28 +4,45 @@
 
 # Days spent in-center per state episode: Hospitalization = all days;
 # HD = days * sessions/7; PD = training days + one visit per interval.
-# in_center_params: named list with hd_sessions_per_week, pd_training_days and
-# pd_visit_interval (defined in the analysis script).
-in_center_days <- function(state, days, in_center_params) {
-  # in-center days by state
+# PD training days are only counted when PD is newly started (pd_new_start = TRUE);
+# when PD resumes after an interruption by a hospitalization or HD, no training days are added
+# (see flag_pd_new_start). in_center_params: named list with hd_sessions_per_week,
+# pd_training_days and pd_visit_interval (defined in the analysis script).
+in_center_days <- function(state, days, in_center_params, pd_new_start = TRUE) {
+  train <- fifelse(pd_new_start, in_center_params$pd_training_days, 0)
   fcase(
     state == "Hospitalization",
     days,
     state == "HD",
     days * in_center_params$hd_sessions_per_week / 7,
     state == "PD",
-    pmin(days, in_center_params$pd_training_days) +
-      pmax(days - in_center_params$pd_training_days, 0) / in_center_params$pd_visit_interval,
+    pmin(days, train) + pmax(days - train, 0) / in_center_params$pd_visit_interval,
     default = 0
   )
+}
+
+# Flags rows (by reference) where PD is a NEW start, i.e. where training days are counted.
+# Hospitalization and HD rows are skipped when looking back: a PD row is NOT a new start if
+# the last earlier row that is neither Hospitalization nor HD is PD (PD -> Hosp -> PD,
+# PD -> HD -> PD, PD -> Hosp -> HD -> PD). It IS a new start for a patient's first PD, for
+# HD -> PD without earlier PD, and after time at home (PD -> At home -> PD, e.g. recovery).
+flag_pd_new_start <- function(dt) {
+  setorder(dt, LOPNR, tstart)
+  dt[, pd_new_start := {
+    idx    <- fifelse(!state %in% c("Hospitalization", "HD"), seq_len(.N), 0L)
+    last   <- shift(cummax(idx), fill = 0L)
+    prev_s <- fifelse(last == 0L, NA_character_, state[pmax(last, 1L)])
+    is.na(prev_s) | prev_s != "PD"
+  }, by = LOPNR]
+  invisible(dt)
 }
 
 # Sums the row-level in_center column per patient onto the days-per-state table.
 # Also adds "Time at home" = days alive (all rows except Death) - in-center days, so it
 # includes days at home on dialysis (HD/PD outside the in-center sessions/visits), and its
 # components / those of the in-center days:
-#   "Home without dialysis"  = days in the "At home" state
-#   "Home on dialysis"       = HD + PD days - in-center dialysis days
+#   "Home without dialysis"  = days alive before the first HD/PD start - in-center days before it
+#   "Home on dialysis"       = days alive from the first HD/PD start onward - in-center days from then
 #   "In-center hospitalized" = in-center days in the Hospitalization state (all hospital days)
 #   "In-center dialysis"     = in-center days in the HD / PD states (sessions / visits)
 # so Home without + Home on dialysis = Time at home, hospitalized + dialysis = In-center.
@@ -44,9 +61,12 @@ add_in_center_per_patient <- function(days_dt, rows_dt) {
   ic <- rows_dt[, .(
     `In-center` = sum(in_center),
     `Time at home` = sum(days_in_row[state != "Death"]) - sum(in_center),
-    `Home without dialysis` = sum(days_in_row[state == "At home"]),
-    `Home on dialysis` = sum(days_in_row[state %in% c("HD", "PD")]) -
-      sum(in_center[state %in% c("HD", "PD")]),
+    # before the first HD/PD start: days at home (= days alive - in-center days)
+    `Home without dialysis` = sum(days_in_row[!after_dialysis & state != "Death"]) -
+      sum(in_center[!after_dialysis]),
+    # from the first HD/PD start onward: days alive - in-center days, whatever the state
+    `Home on dialysis` = sum(days_in_row[after_dialysis & state != "Death"]) -
+      sum(in_center[after_dialysis]),
     `In-center hospitalized` = sum(in_center[state == "Hospitalization"]),
     `In-center dialysis` = sum(in_center[state %in% c("HD", "PD")]),
     `Days after dialysis` = sum(days_in_row[after_dialysis & state != "Death"]),
@@ -924,7 +944,8 @@ build_full_dt_from_simulated <- function(simulated_dt,
   
   # days and in-center days on the completed episodes
   full_dt[, days_in_row := as.numeric(tstop - tstart)]
-  full_dt[, in_center   := in_center_days(state, days_in_row, in_center_params)]
+  flag_pd_new_start(full_dt)
+  full_dt[, in_center   := in_center_days(state, days_in_row, in_center_params, pd_new_start)]
   
   full_dt
 }
@@ -1061,7 +1082,8 @@ fit_and_simulate <- function(baseline,
   baseline_long[, days_in_row := as.numeric(tstop - tstart)]
   
   # in-center days in each row
-  baseline_long[, in_center := in_center_days(state, days_in_row, in_center_params)]
+  flag_pd_new_start(baseline_long)
+  baseline_long[, in_center := in_center_days(state, days_in_row, in_center_params, pd_new_start)]
   
   # days per patient per state
   days_per_patient <- dcast(
