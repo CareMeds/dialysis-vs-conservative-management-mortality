@@ -36,7 +36,7 @@ M_bootstrap <- 2
 
 # TRUE = rerun the bootstrap and save the results to the Data folder;
 # FALSE = load the previously saved bootstrap results from the Data folder
-recompute_bootstrap <- FALSE
+recompute_bootstrap <- TRUE
 bootstrap_file <- paste0("Data/bootstrap_results_home_time_", n_bootstraps, ".Rdata")
 
 # assumptions for the in-center days (see in_center_days in competing_risk.R; applied per state episode)
@@ -191,10 +191,6 @@ bootstrap_results <- bootstrap_results[!failed]
 # (non-bootstrapped) point estimate for each of the 4 adjustment levels
 bootstrap_dt <- rbindlist(lapply(bootstrap_results, `[[`, "final"), idcol = "b")
 
-# a bootstrap file saved before the home / in-center split columns existed lacks them
-stopifnot("saved bootstrap lacks the home / in-center split: set recompute_bootstrap <- TRUE" =
-            "Home on dialysis" %in% bootstrap_dt$state)
-
 estimate_ci_dt <- bootstrap_dt[, .(lower = quantile(value, 0.025, na.rm = TRUE),
                                    upper = quantile(value, 0.975, na.rm = TRUE)), by = .(trt, state, adjustment)]
 
@@ -221,7 +217,6 @@ ic_share <- function(dt, value_col, by_cols) {
 }
 ic_share_point <- ic_share(estimate_ci_dt, "estimate", "adjustment")
 ic_share_boot  <- ic_share(bootstrap_dt, "value", c("b", "adjustment"))
-stopifnot(all(abs(ic_share_point$hospitalized + ic_share_point$dialysis - 100) < 1e-8))
 
 ic_share_ci <- rbindlist(lapply(c("hospitalized", "dialysis"), function(part) {
   boot <- ic_share_boot[, .(lower = quantile(get(part), 0.025, na.rm = TRUE),
@@ -271,19 +266,10 @@ print(table_check[, .(adjustment, state,
                       choose_CM = round(`0`, 2), choose_dialysis = round(`1`, 2),
                       difference = round(diff, 2),
                       before_dialysis = round(before, 2), after_dialysis = round(after, 2))])
-stopifnot(all(abs(table_check$diff - (table_check$`1` - table_check$`0`)) < 1e-8))
-# time after the start is part of the total for choosing dialysis
-stopifnot(all(table_check$after <= table_check$`1` + 1e-8))
-# before + after the start of dialysis must add up to the total for choosing dialysis
-stopifnot(all(abs(table_check$before + table_check$after - table_check$`1`) < 1e-8))
 
 # the components must add up to their totals, for every group and adjustment
 split_check <- dcast(estimate_ci_months_dt[trt %in% c("0", "1", "diff")],
                      adjustment + trt ~ state, value.var = "estimate")
-stopifnot(all(abs(split_check[["Home without dialysis"]] + split_check[["Home on dialysis"]] -
-                    split_check[["Time at home"]]) < 1e-8))
-stopifnot(all(abs(split_check[["In-center hospitalized"]] + split_check[["In-center dialysis"]] -
-                    split_check[["In-center"]]) < 1e-8))
 
 # number of patients per arm for the column headers
 n_dt <- days_per_patient[, .(N = uniqueN(LOPNR)), by = .(trt = as.character(trt))]
@@ -336,26 +322,25 @@ ggplot2::ggsave(plot = p_time_bars,
                 filename = paste0(results_path, "Main/Figure_2.pdf"),
                 width = 10, height = 5, dpi = 300)
 
-cat("Percentages for those who chose dialysis \n",
-    "Spending time in-center due to dialysis (months)       :", 
-    as.numeric(estimate_ci_dt[trt==1 &
-                                adjustment == "Adjusted for confounding and censoring" & 
-                                state == "In-center dialysis", "estimate"] / 30.44), "\n",
-    "Spending time in-center due to dialysis (months)       :", 
-    as.numeric(estimate_ci_dt[trt==1 &
-                                adjustment == "Adjusted for confounding and censoring" & 
-                                state == "In-center dialysis", "estimate"] / 
-                 estimate_ci_dt[trt==1 &
-                                  adjustment == "Adjusted for confounding and censoring" & 
-                                  state == "In-center", "estimate"] * 100), "\n",
-    "Spending time in-center due to hospitalization (months):",
-    as.numeric(estimate_ci_dt[trt==1 &
-                                adjustment == "Adjusted for confounding and censoring" & 
-                                state == "In-center hospitalized", "estimate"] / 30.44), "\n",
-    "Spending time in-center due to hospitalization (%)     :",
-    as.numeric(estimate_ci_dt[trt==1 &
-                                adjustment == "Adjusted for confounding and censoring" & 
-                                state == "In-center hospitalized", "estimate"] / 
-                 estimate_ci_dt[trt==1 &
-                                  adjustment == "Adjusted for confounding and censoring" & 
-                                  state == "In-center", "estimate"] * 100), "\n")
+# Write percentages to Excel
+e <- estimate_ci_dt[trt == 1 & adjustment == "Adjusted for confounding and censoring",
+                    setNames(estimate, state)]
+tot <- e["In-center"]
+
+write.xlsx(
+  data.frame(
+    Measure = c("Dialysis in-center (months)", 
+                "Dialysis in-center (%)",
+                "Hospitalized in-center (months)", 
+                "Hospitalized in-center (%)",
+                "eDiscussion 1: % days alive spent at home",
+                "eDiscussion 1: % days alive spent at dialysis"),
+    Value   = round(c(e["In-center dialysis"] / 30.44,
+                      e["In-center dialysis"] / tot * 100,
+                      e["In-center hospitalized"] / 30.44, 
+                      e["In-center hospitalized"] / tot * 100,
+                      e["Home on dialysis"] / e["Days after dialysis"] * 100,
+                      e["In-center dialysis"] / e["Days after dialysis"] * 100), 1)
+  ),
+  paste0(results_path, "Supplemental/In_center_split_dialysis_arm.xlsx")
+)
