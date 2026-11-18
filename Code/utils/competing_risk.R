@@ -1073,7 +1073,7 @@ fit_and_simulate <- function(baseline,
     in_center_params  = in_center_params
   )
   
-  # pool esitmates ------------------------------------------------------------#
+  # pool estimates ------------------------------------------------------------#
   # pool by averaging the M replicates per patient
   days_per_patient_imputed <- rbindlist(lapply(imputations, `[[`, "days_per_patient_imputed"),
                                         idcol = "m")[, lapply(.SD, mean), by = .(LOPNR, trt), .SDcols = c(state_cols, in_center_cols)]
